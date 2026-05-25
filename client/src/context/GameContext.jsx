@@ -113,6 +113,19 @@ function reducer(state, action) {
         incomingReaction: { ...action.payload, ts: Date.now() },
       };
 
+    case 'TOURNAMENT_ENDED':
+      return {
+        ...state,
+        tournamentState: state.tournamentState
+          ? { ...state.tournamentState, status: 'finished', leaderboard: action.payload.leaderboard || state.tournamentState.leaderboard }
+          : state.tournamentState,
+        // If player is mid-game, the game_over will arrive separately — just mark lobby
+        currentMatch:  null,
+        gameResult:    null,
+        playerStatus:  state.role === 'player' ? 'waiting' : state.playerStatus,
+        showCountdown: false,
+      };
+
     case 'RETURN_TO_LOBBY':
       return {
         ...state,
@@ -166,6 +179,10 @@ export function GameProvider({ children }) {
       dispatch({ type: 'REACTION_RECEIVED', payload: data });
     });
 
+    socket.on('tournament_ended', (data) => {
+      dispatch({ type: 'TOURNAMENT_ENDED', payload: data });
+    });
+
     socket.connect();
 
     return () => {
@@ -178,6 +195,7 @@ export function GameProvider({ children }) {
       socket.off('move_made');
       socket.off('game_over');
       socket.off('reaction_received');
+      socket.off('tournament_ended');
     };
   }, []);
 
@@ -201,6 +219,12 @@ export function GameProvider({ children }) {
 
   const startTournament = useCallback((roomCode, callback) => {
     socket.emit('start_tournament', { roomCode }, callback);
+  }, []);
+
+  const endTournament = useCallback((roomCode, callback) => {
+    socket.emit('end_tournament', { roomCode }, (res) => {
+      callback?.(res);
+    });
   }, []);
 
   const makeMove = useCallback((matchId, row, col, callback) => {
@@ -232,6 +256,7 @@ export function GameProvider({ children }) {
       createTournament,
       joinRoom,
       startTournament,
+      endTournament,
       makeMove,
       sendReaction,
       requestNextMatch,

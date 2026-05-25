@@ -334,6 +334,26 @@ io.on('connection', (socket) => {
     callback?.({ success: true });
   });
 
+  socket.on('end_tournament', ({ roomCode }, callback) => {
+    const t = tournaments[roomCode];
+    if (!t) return callback?.({ success: false, message: 'Phòng không tồn tại' });
+    if (t.adminSocketId !== socket.id) return callback?.({ success: false, message: 'Không có quyền!' });
+
+    // Resolve all still-active matches as draws (fair to all players)
+    for (const [, match] of t.matches) {
+      if (match.status === 'active') {
+        resolveGameOver(match, t, roomCode, { winnerId: null, isDraw: true });
+      }
+    }
+
+    t.status = 'finished';
+    const finalState = getTournamentPublicState(t);
+    io.to(roomCode).emit('tournament_ended', { leaderboard: finalState.leaderboard });
+    broadcastTournamentState(roomCode);
+    console.log(`[TOURNAMENT] Ended: ${roomCode}`);
+    callback?.({ success: true, leaderboard: finalState.leaderboard });
+  });
+
   socket.on('make_move', ({ matchId, row, col }, callback) => {
     const meta = socketMeta[socket.id];
     if (!meta) return callback?.({ success: false });

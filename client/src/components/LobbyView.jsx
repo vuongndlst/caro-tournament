@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
-import { Clock, Users, Trophy, Wifi, WifiOff, Gamepad2, Eye } from 'lucide-react';
+import { Clock, Users, Trophy, Wifi, WifiOff, Gamepad2, Eye, Flag } from 'lucide-react';
 import SpectatorView from './SpectatorView';
 
 export default function LobbyView() {
@@ -8,6 +8,49 @@ export default function LobbyView() {
   const leaderboard = tournamentState?.leaderboard || [];
   const status      = tournamentState?.status || 'waiting';
   const players     = tournamentState?.players || [];
+
+  // ── Tournament ended screen ──────────────────────────────────────────────
+  if (status === 'finished') {
+    const myRankFinal = leaderboard.findIndex(p => p.nickname === nickname) + 1;
+    const top3 = leaderboard.slice(0, 3);
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex flex-col items-center justify-center p-4 gap-5">
+        <div className="card w-full max-w-md text-center animate-bounce-in">
+          <div className="w-16 h-16 bg-yellow-500/20 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-yellow-500/40">
+            <Flag className="w-8 h-8 text-yellow-400" />
+          </div>
+          <h2 className="text-2xl font-extrabold text-yellow-300 mb-1">Giải đấu kết thúc!</h2>
+          {myRankFinal > 0 && (
+            <p className="text-slate-400 text-sm mb-4">
+              Bạn xếp hạng <span className="text-white font-bold">#{myRankFinal}</span>
+              {myRankFinal === 1 && ' 🥇 Vô địch!'}
+              {myRankFinal === 2 && ' 🥈 Á quân!'}
+              {myRankFinal === 3 && ' 🥉 Hạng ba!'}
+            </p>
+          )}
+          <div className="space-y-2">
+            {top3.map((p, i) => (
+              <div key={p.id} className={`flex items-center gap-3 rounded-xl px-4 py-2.5 ${
+                i === 0 ? 'bg-yellow-900/40 border border-yellow-700/40' :
+                i === 1 ? 'bg-slate-600/30 border border-slate-600/40' :
+                          'bg-amber-900/20 border border-amber-800/30'
+              }`}>
+                <span className="text-xl">{['🥇','🥈','🥉'][i]}</span>
+                <span className={`font-bold flex-1 text-left ${p.nickname === nickname ? 'text-indigo-300' : 'text-white'}`}>
+                  {p.nickname}
+                </span>
+                <span className="text-indigo-300 font-bold">{p.score}đ</span>
+                <span className="text-slate-500 text-xs">{p.wins}T·{p.draws}H·{p.losses}B</span>
+              </div>
+            ))}
+          </div>
+          {leaderboard.length > 3 && (
+            <p className="text-slate-500 text-xs mt-3">+{leaderboard.length - 3} người chơi khác</p>
+          )}
+        </div>
+      </div>
+    );
+  }
   const allMatches  = tournamentState?.matches || [];
   const liveMatches = allMatches.filter(m => m.status === 'active');
 

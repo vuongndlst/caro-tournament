@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Clock } from 'lucide-react';
 
-export default function TimerBar({ turnStartedAt, turnDurationMs, isMyTurn, key: _key }) {
+export default function TimerBar({ turnStartedAt, turnDurationMs, isMyTurn }) {
   const [remaining, setRemaining] = useState(turnDurationMs);
   const rafRef = useRef(null);
 

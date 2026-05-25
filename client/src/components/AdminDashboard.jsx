@@ -2,15 +2,24 @@ import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 import {
   Users, Swords, Trophy, Play, Copy, CheckCheck,
-  Wifi, WifiOff, Crown, Circle, Shield, QrCode, X
+  Wifi, WifiOff, Crown, Circle, Shield, QrCode, X,
+  StopCircle, Flag
 } from 'lucide-react';
 
 export default function AdminDashboard() {
-  const { roomCode, tournamentState, startTournament, connected } = useGame();
+  const { roomCode, tournamentState, startTournament, endTournament, connected } = useGame();
   const [copied, setCopied]     = useState(false);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState('');
   const [showQR, setShowQR]     = useState(false);
+  const [ending, setEnding]     = useState(false);
+  const [showEndConfirm, setShowEndConfirm] = useState(false);
+
+  const handleEnd = () => {
+    setEnding(true);
+    endTournament(roomCode, () => setEnding(false));
+    setShowEndConfirm(false);
+  };
 
   // Build the join URL for the QR code
   const joinUrl = `${window.location.origin}/?room=${roomCode}`;
@@ -124,7 +133,7 @@ export default function AdminDashboard() {
                   </button>
                   {players.length < 2 && <p className="text-slate-500 text-xs mt-1.5 text-center">Cần ít nhất 2 người</p>}
                 </div>
-              ) : (
+              ) : status === 'active' ? (
                 <div className="text-right space-y-2">
                   <div className="text-xs text-slate-400">
                     Còn lại: <span className="text-white font-bold">{waitingCount}</span> người chờ ghép trận
@@ -135,6 +144,39 @@ export default function AdminDashboard() {
                       Ghép trận ngay →
                     </button>
                   )}
+                  <div className="pt-1 border-t border-slate-700/60">
+                    {!showEndConfirm ? (
+                      <button
+                        onClick={() => setShowEndConfirm(true)}
+                        className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 transition-colors"
+                      >
+                        <StopCircle className="w-3.5 h-3.5" /> Kết thúc giải đấu
+                      </button>
+                    ) : (
+                      <div className="bg-red-900/30 border border-red-700/40 rounded-xl p-3 text-left animate-fade-in">
+                        <p className="text-red-300 text-xs font-semibold mb-2">⚠️ Xác nhận kết thúc?</p>
+                        <p className="text-slate-400 text-xs mb-3">Các trận đang chơi sẽ hoà. Điểm được lưu lại.</p>
+                        <div className="flex gap-2">
+                          <button onClick={handleEnd} disabled={ending}
+                            className="flex-1 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold py-1.5 rounded-lg transition-colors flex items-center justify-center gap-1">
+                            {ending ? <span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" /> : <Flag className="w-3 h-3" />}
+                            Kết thúc
+                          </button>
+                          <button onClick={() => setShowEndConfirm(false)}
+                            className="flex-1 bg-slate-600 hover:bg-slate-500 text-white text-xs font-semibold py-1.5 rounded-lg transition-colors">
+                            Huỷ
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                /* Tournament finished state */
+                <div className="text-right">
+                  <div className="badge bg-slate-700/60 text-slate-300 border border-slate-600/40 text-sm px-4 py-2">
+                    <Flag className="w-4 h-4 text-yellow-400" /> Giải đấu đã kết thúc
+                  </div>
                 </div>
               )}
             </div>
