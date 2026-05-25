@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { font-family: 'Segoe UI', system-ui, sans-serif; scroll-behavior: smooth; }
+  body { @apply bg-slate-900 text-white min-h-screen; }
+  * { box-sizing: border-box; }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-semibold
+           px-6 py-3 rounded-xl transition-all duration-150 disabled:opacity-50
+           disabled:cursor-not-allowed shadow-lg shadow-indigo-900/40 select-none;
+  }
+  .btn-secondary {
+    @apply bg-slate-700 hover:bg-slate-600 active:bg-slate-800 text-white font-semibold
+           px-6 py-3 rounded-xl transition-all duration-150 disabled:opacity-50
+           disabled:cursor-not-allowed select-none;
+  }
+  .btn-danger {
+    @apply bg-red-600 hover:bg-red-500 text-white font-semibold px-6 py-3
+           rounded-xl transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .card {
+    @apply bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl backdrop-blur-sm;
+  }
+  .input-field {
+    @apply w-full bg-slate-700/80 border border-slate-600 rounded-xl px-4 py-3 text-white
+           placeholder-slate-400 focus:outline-none focus:border-indigo-500
+           focus:ring-2 focus:ring-indigo-500/30 transition-all;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold;
+  }
+}
+
+/* ── Board ─────────────────────────────────────────────────────────────────── */
+.board-cell { transition: background-color 0.08s; }
+.board-cell:hover .cell-preview { opacity: 0.25; }
+.cell-win-flash { animation: winFlash 0.6s ease-out forwards; }
+
+/* ── Animations ────────────────────────────────────────────────────────────── */
+@keyframes bounceIn {
+  0%   { transform: scale(0.3); opacity: 0; }
+  50%  { transform: scale(1.15); }
+  75%  { transform: scale(0.92); }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes winFlash {
+  0%   { transform: scale(1); box-shadow: 0 0 0 0 rgba(250,204,21,0.7); }
+  30%  { transform: scale(1.25); box-shadow: 0 0 0 8px rgba(250,204,21,0); }
+  60%  { transform: scale(1.1); }
+  100% { transform: scale(1.12); }
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pieceDrop {
+  0%   { transform: scale(0.4) rotate(-15deg); opacity: 0; }
+  65%  { transform: scale(1.12) rotate(3deg); }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+@keyframes timerPulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.animate-bounce-in   { animation: bounceIn 0.35s cubic-bezier(0.34,1.56,0.64,1) both; }
+.animate-fade-in     { animation: fadeInUp 0.3s ease-out both; }
+.animate-fade        { animation: fadeIn 0.25s ease-out both; }
+.animate-slide-down  { animation: slideDown 0.25s ease-out both; }
+.animate-piece       { animation: pieceDrop 0.22s cubic-bezier(0.34,1.56,0.64,1) both; }
+.animate-pulse-fast  { animation: timerPulse 0.75s ease-in-out infinite; }
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #475569; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+/* ── Board glow for winning cells ───────────────────────────────────────────── */
+.win-cell-x { box-shadow: 0 0 0 2px #3b82f6, 0 0 14px 4px rgba(59,130,246,0.55) !important; border-radius: 50% !important; }
+.win-cell-o { box-shadow: 0 0 0 2px #ef4444, 0 0 14px 4px rgba(239,68,68,0.55) !important; border-radius: 50% !important; }
+
+/* ── Countdown overlay ──────────────────────────────────────────────────────── */
+@keyframes countdownPop {
+  0%   { transform: scale(0.2) rotate(-10deg); opacity: 0; }
+  50%  { transform: scale(1.15) rotate(2deg); opacity: 1; }
+  75%  { transform: scale(0.95); }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+.animate-countdown { animation: countdownPop 0.4s cubic-bezier(0.34,1.56,0.64,1) both; }
+
+/* ── Floating emoji ──────────────────────────────────────────────────────────── */
+@keyframes floatUp {
+  0%   { transform: translateY(0) scale(1);   opacity: 1; }
+  80%  { transform: translateY(-70px) scale(1.2); opacity: 0.8; }
+  100% { transform: translateY(-100px) scale(0.9); opacity: 0; }
+}
+.animate-float-up { animation: floatUp 1.6s ease-out forwards; }
