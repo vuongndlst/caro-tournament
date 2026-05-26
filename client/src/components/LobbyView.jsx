@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 import { Clock, Users, Trophy, Wifi, WifiOff, Gamepad2, Eye, Flag } from 'lucide-react';
 import SpectatorView from './SpectatorView';
+import Footer from './Footer';
 
 export default function LobbyView() {
   const { nickname, roomCode, tournamentState, connected } = useGame();
@@ -48,6 +49,7 @@ export default function LobbyView() {
             <p className="text-slate-500 text-xs mt-3">+{leaderboard.length - 3} người chơi khác</p>
           )}
         </div>
+        <Footer />
       </div>
     );
   }
@@ -213,6 +215,8 @@ export default function LobbyView() {
             style={{ animationDelay: `${i*0.12}s`, animationDuration: '1s' }} />
         ))}
       </div>
+
+      <Footer />
     </div>
   );
 }

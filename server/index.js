@@ -188,9 +188,47 @@ function matchWaitingPlayers(roomCode) {
     p => p.status === 'waiting' && p.socketId !== null
   );
 
-  for (let i = 0; i + 1 < waiting.length; i += 2) {
+  // Shuffle to randomise pairings each round
+  for (let i = waiting.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [waiting[i], waiting[j]] = [waiting[j], waiting[i]];
+  }
+
+  // Greedy pairing: prefer partners that are NOT the last opponent
+  const used = new Set();
+  const pairs = [];
+
+  for (let i = 0; i < waiting.length; i++) {
+    if (used.has(waiting[i].id)) continue;
     const p1 = waiting[i];
-    const p2 = waiting[i + 1];
+
+    // First try to find a partner who is not the last opponent
+    let partner = null;
+    for (let j = i + 1; j < waiting.length; j++) {
+      if (used.has(waiting[j].id)) continue;
+      if (waiting[j].id !== p1.lastOpponent) {
+        partner = waiting[j];
+        break;
+      }
+    }
+    // Fallback: if everyone left is the last opponent, pair with them anyway
+    if (!partner) {
+      for (let j = i + 1; j < waiting.length; j++) {
+        if (!used.has(waiting[j].id)) { partner = waiting[j]; break; }
+      }
+    }
+    if (partner) {
+      pairs.push([p1, partner]);
+      used.add(p1.id);
+      used.add(partner.id);
+    }
+  }
+
+  for (const [p1, p2] of pairs) {
+    // Record last opponent so they won't be rematched next round
+    p1.lastOpponent = p2.id;
+    p2.lastOpponent = p1.id;
+
     const matchId = generateMatchId();
     const match = {
       id: matchId,
@@ -310,6 +348,7 @@ io.on('connection', (socket) => {
     const player = {
       id: socket.id, socketId: socket.id, nickname: nickname.trim(),
       score: 0, wins: 0, draws: 0, losses: 0, status: 'waiting', streak: 0,
+      lastOpponent: null, // Track last opponent to avoid immediate rematches
     };
     t.players.set(socket.id, player);
     socketMeta[socket.id] = { roomCode: code, role: 'player', nickname: nickname.trim() };

@@ -1,10 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useGame } from '../context/GameContext';
+import RulesModal from './RulesModal';
+import Footer from './Footer';
+import { startMusic, stopMusic, setMusicMuted } from '../utils/music';
 import {
   Users, Swords, Trophy, Play, Copy, CheckCheck,
   Wifi, WifiOff, Crown, Circle, Shield, QrCode, X,
-  StopCircle, Flag
+  StopCircle, Flag, HelpCircle, Volume2, VolumeX
 } from 'lucide-react';
+import { isMuted, toggleMute } from '../utils/sounds';
 
 export default function AdminDashboard() {
   const { roomCode, tournamentState, startTournament, endTournament, connected } = useGame();
@@ -14,6 +18,20 @@ export default function AdminDashboard() {
   const [showQR, setShowQR]     = useState(false);
   const [ending, setEnding]     = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [showRules, setShowRules] = useState(false);
+  const [muted, setMuted] = useState(isMuted());
+
+  // Lobby background music
+  useEffect(() => {
+    startMusic('lobby');
+    return () => stopMusic();
+  }, []);
+
+  const handleToggleMute = () => {
+    const nowMuted = toggleMute();
+    setMuted(nowMuted);
+    setMusicMuted(nowMuted);
+  };
 
   const handleEnd = () => {
     setEnding(true);
@@ -48,6 +66,8 @@ export default function AdminDashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 p-4 lg:p-6">
+      {showRules && <RulesModal onClose={() => setShowRules(false)} />}
+
       <div className="max-w-6xl mx-auto space-y-4 animate-fade-in">
 
         {/* Header bar */}
@@ -57,11 +77,29 @@ export default function AdminDashboard() {
               <Shield className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-extrabold leading-tight">CaroTourney</h1>
+              <h1 className="text-lg font-extrabold leading-tight">
+                LSTS Caro<span className="text-indigo-400">Tourney</span>
+              </h1>
               <p className="text-xs text-slate-400">Bảng điều khiển giáo viên</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowRules(true)}
+              className="p-2 rounded-lg bg-slate-700/50 hover:bg-slate-700 border border-slate-600/40 text-slate-400 hover:text-slate-200 transition-colors"
+              title="Luật chơi & Hướng dẫn"
+            >
+              <HelpCircle className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleToggleMute}
+              className="p-2 rounded-lg bg-slate-700/50 hover:bg-slate-700 border border-slate-600/40 transition-colors"
+              title={muted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+            >
+              {muted
+                ? <VolumeX className="w-4 h-4 text-slate-400" />
+                : <Volume2 className="w-4 h-4 text-indigo-400" />}
+            </button>
             <span className={`badge text-xs px-3 py-1 ${connected ? 'bg-green-900/60 text-green-300 border border-green-700/40' : 'bg-red-900/60 text-red-300 border border-red-700/40'}`}>
               {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
               {connected ? 'Kết nối' : 'Mất kết nối'}
@@ -326,6 +364,8 @@ export default function AdminDashboard() {
           </div>
         </div>
       </div>
+
+      <Footer className="mt-6" />
     </div>
   );
 }

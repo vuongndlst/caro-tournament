@@ -6,6 +6,7 @@ import TimerBar from './TimerBar';
 import Countdown from './Countdown';
 import EmojiReactions from './EmojiReactions';
 import { sounds, isMuted, toggleMute } from '../utils/sounds';
+import { startMusic, stopMusic, setMusicMuted } from '../utils/music';
 import { Trophy, Handshake, Skull, ChevronRight, Swords, Volume2, VolumeX } from 'lucide-react';
 
 // ── Confetti helper ────────────────────────────────────────────────────────────
@@ -40,9 +41,20 @@ export default function GameView() {
     makeMove(currentMatch.matchId, row, col);
   }, [currentMatch, playerId, playerStatus, makeMove]);
 
+  // Game background music — start when playing, stop on unmount/result
+  useEffect(() => {
+    if (playerStatus === 'playing') {
+      startMusic('game');
+    } else {
+      stopMusic();
+    }
+    return () => stopMusic();
+  }, [playerStatus]);
+
   const handleToggleMute = () => {
     const nowMuted = toggleMute();
     setMuted(nowMuted);
+    setMusicMuted(nowMuted);
   };
 
   const myScore = tournamentState?.leaderboard?.find(p => p.nickname === nickname);
