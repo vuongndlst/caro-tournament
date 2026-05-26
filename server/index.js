@@ -31,9 +31,10 @@ const io = new Server(server, {
   },
 });
 
-const TURN_TIMEOUT_MS   = 30_000;  // caro / tictactoe
-const CHESS_TIMEOUT_MS  = Number(process.env.CHESS_TIMEOUT_TEST_MS) || 90_000; // chess (override for testing)
-const RECONNECT_WAIT_MS = 20_000; // window before forfeit on disconnect
+const TURN_TIMEOUT_MS       = 30_000;   // caro / tictactoe per-move timeout
+const CHESS_INITIAL_TIME_MS = Number(process.env.CHESS_TIMEOUT_TEST_MS) || (5 * 60 * 1000); // per-player clock (override for testing)
+const CHESS_INCREMENT_MS    = process.env.CHESS_TIMEOUT_TEST_MS ? 0 : 3_000;                 // seconds added per move (0 in test mode)
+const RECONNECT_WAIT_MS     = 20_000; // window before forfeit on disconnect
 const MOVE_RATE_MS      = 400;    // minimum ms between moves (anti-spam)
 const ELO_START         = 1200;
 const ELO_K_BASE        = 32;
@@ -157,12 +158,24 @@ function clearMatchTimer(matchId) {
 function startMatchTimer(match, roomCode) {
   clearMatchTimer(match.id);
   const startedAt = Date.now();
-  const durationMs = match.turnDurationMs || TURN_TIMEOUT_MS;
+  match.turnClockStarted = startedAt;
+
+  const t = tournaments[roomCode];
+  const isChess = t?.gameType === 'chess';
+  // For chess: use remaining clock time of the active player; for others: fixed turn timeout
+  const durationMs = isChess
+    ? (match.currentTurn === match.p1 ? match.p1TimeMs : match.p2TimeMs)
+    : (match.turnDurationMs || TURN_TIMEOUT_MS);
+
   matchTimers[match.id] = {
     startedAt,
     timerId: setTimeout(() => handleTurnTimeout(match.id, roomCode), durationMs),
   };
-  const payload = { matchId: match.id, currentTurn: match.currentTurn, turnStartedAt: startedAt, turnDurationMs: durationMs };
+  const payload = {
+    matchId: match.id, currentTurn: match.currentTurn,
+    turnStartedAt: startedAt, turnDurationMs: durationMs,
+    ...(isChess && { p1TimeMs: match.p1TimeMs, p2TimeMs: match.p2TimeMs }),
+  };
   io.to(match.p1).emit('turn_start', payload);
   io.to(match.p2).emit('turn_start', payload);
   io.to(`spectate_${match.id}`).emit('turn_start', payload);
@@ -260,32 +273,43 @@ function createMatch(tournament, roomCode, p1, p2) {
   p1.lastOpponent = p2.id;
   p2.lastOpponent = p1.id;
   const matchId = generateMatchId();
+  const isChess = tournament.gameType === 'chess';
   let board, size;
-  let chessInstance = null;
-  if (tournament.gameType === 'chess') {
-    chessInstance = new Chess();
+  if (isChess) {
+    const chessInstance = new Chess();
     board = chessInstance.fen();
     size = 8;
   } else {
     size = tournament.gameType === 'tictactoe' ? 3 : 15;
     board = createEmptyBoard(size);
   }
-  
-  const turnDurationMs = tournament.gameType === 'chess' ? CHESS_TIMEOUT_MS : TURN_TIMEOUT_MS;
+
+  const chessInitial = tournament.chessInitialMs || CHESS_INITIAL_TIME_MS;
+  const chessInc     = tournament.chessIncMs     ?? CHESS_INCREMENT_MS;
   const match = {
     id: matchId, p1: p1.id, p2: p2.id,
     board, currentTurn: p1.id,
     status: 'active', winner: null, startedAt: Date.now(), size,
-    turnDurationMs,
-    chessFen: chessInstance ? chessInstance.fen() : null, // keep track of state for chess
-    lastMoveAt: {}, // rate limiting: socketId → timestamp
+    turnDurationMs: isChess ? null : TURN_TIMEOUT_MS,
+    // Chess per-player clocks
+    p1TimeMs:         isChess ? chessInitial : null,
+    p2TimeMs:         isChess ? chessInitial : null,
+    chessIncMs:       isChess ? chessInc     : null,
+    turnClockStarted: null,
+    lastMoveAt: {},
   };
   tournament.matches.set(matchId, match);
   p1.status = 'playing'; p1.waitingSince = null;
   p2.status = 'playing'; p2.waitingSince = null;
 
   const turnStartedAt = Date.now();
-  const base = { matchId, gameType: tournament.gameType, currentTurn: match.currentTurn, board: match.board, size: match.size, turnStartedAt, turnDurationMs: match.turnDurationMs };
+  const base = {
+    matchId, gameType: tournament.gameType,
+    currentTurn: match.currentTurn, board: match.board, size: match.size,
+    turnStartedAt,
+    turnDurationMs: isChess ? chessInitial : TURN_TIMEOUT_MS,
+    ...(isChess && { p1TimeMs: match.p1TimeMs, p2TimeMs: match.p2TimeMs, chessIncMs: match.chessIncMs }),
+  };
   io.to(p1.id).emit('match_found', { ...base, opponentNickname: p2.nickname, opponentId: p2.id, yourSymbol: 'X', opponentSymbol: 'O' });
   io.to(p2.id).emit('match_found', { ...base, opponentNickname: p1.nickname, opponentId: p1.id, yourSymbol: 'O', opponentSymbol: 'X' });
   startMatchTimer(match, roomCode);
@@ -389,16 +413,20 @@ app.get('/leaderboard/:roomCode', (req, res) => {
 io.on('connection', (socket) => {
   console.log(`[CONNECT] ${socket.id}`);
 
-  socket.on('create_tournament', ({ name, gameType, token } = {}, callback) => {
+  socket.on('create_tournament', ({ name, gameType, chessInitialMs, chessIncMs, token } = {}, callback) => {
     const session = verifyAdminToken(token);
     if (!session) return callback?.({ success: false, message: 'Vui lòng đăng nhập để tạo giải đấu!' });
     let roomCode;
     do { roomCode = generateRoomCode(); } while (tournaments[roomCode]);
     const tournamentName = name?.trim() ||
       `Giải đấu ${new Date().toLocaleDateString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric'})}`;
+    const gType = gameType || 'caro';
     tournaments[roomCode] = {
       adminSocketId: socket.id, roomCode, name: tournamentName,
-      gameType: gameType || 'caro',
+      gameType: gType,
+      // Chess time controls (null for non-chess tournaments)
+      chessInitialMs: gType === 'chess' ? (chessInitialMs || CHESS_INITIAL_TIME_MS) : null,
+      chessIncMs:     gType === 'chess' ? (chessIncMs     ?? CHESS_INCREMENT_MS)     : null,
       players: new Map(), matches: new Map(),
       status: 'waiting', createdAt: Date.now(), adminUsername: session.username,
     };
@@ -458,14 +486,23 @@ io.on('connection', (socket) => {
         // Restore the ongoing match for the reconnected player
         const isP1     = activeMatch.p1 === socket.id;
         const opponent = t.players.get(isP1 ? activeMatch.p2 : activeMatch.p1);
+        const isChessReconnect = t.gameType === 'chess';
         io.to(socket.id).emit('match_found', {
           matchId: activeMatch.id, gameType: t.gameType, currentTurn: activeMatch.currentTurn,
           board: activeMatch.board, size: activeMatch.size,
-          turnStartedAt: Date.now(), turnDurationMs: activeMatch.turnDurationMs || TURN_TIMEOUT_MS,
+          turnStartedAt: Date.now(),
+          turnDurationMs: isChessReconnect
+            ? (activeMatch.currentTurn === activeMatch.p1 ? activeMatch.p1TimeMs : activeMatch.p2TimeMs)
+            : (activeMatch.turnDurationMs || TURN_TIMEOUT_MS),
           opponentNickname: opponent?.nickname || '?',
           opponentId: isP1 ? activeMatch.p2 : activeMatch.p1,
           yourSymbol: isP1 ? 'X' : 'O', opponentSymbol: isP1 ? 'O' : 'X',
           reconnecting: true,
+          ...(isChessReconnect && {
+            p1TimeMs: activeMatch.p1TimeMs,
+            p2TimeMs: activeMatch.p2TimeMs,
+            chessIncMs: activeMatch.chessIncMs,
+          }),
         });
         // Notify opponent
         const opponentSocket = isP1 ? activeMatch.p2 : activeMatch.p1;
@@ -554,13 +591,22 @@ io.on('connection', (socket) => {
       try {
         const result = chess.move(move);
         if (!result) return callback?.({ success: false, message: 'Nước đi không hợp lệ!' });
-        
+
+        // ── Deduct elapsed time from mover's clock, then add increment ─────────
+        const elapsed = Date.now() - (match.turnClockStarted || Date.now());
+        if (socket.id === match.p1) {
+          match.p1TimeMs = Math.max(0, match.p1TimeMs - elapsed) + match.chessIncMs;
+        } else {
+          match.p2TimeMs = Math.max(0, match.p2TimeMs - elapsed) + match.chessIncMs;
+        }
+
         match.board = chess.fen();
         const isCheckmate = chess.isCheckmate();
         const isDraw = chess.isDraw();
 
         if (isCheckmate || isDraw) {
-          const movePayload = { matchId, move, currentTurn: match.currentTurn, board: match.board };
+          const movePayload = { matchId, move, currentTurn: match.currentTurn, board: match.board,
+            p1TimeMs: match.p1TimeMs, p2TimeMs: match.p2TimeMs };
           io.to(match.p1).emit('move_made', movePayload);
           io.to(match.p2).emit('move_made', movePayload);
           io.to(`spectate_${match.id}`).emit('move_made', movePayload);
@@ -570,7 +616,8 @@ io.on('connection', (socket) => {
           });
         } else {
           match.currentTurn = match.p1 === socket.id ? match.p2 : match.p1;
-          const movePayload = { matchId, move, currentTurn: match.currentTurn, board: match.board };
+          const movePayload = { matchId, move, currentTurn: match.currentTurn, board: match.board,
+            p1TimeMs: match.p1TimeMs, p2TimeMs: match.p2TimeMs };
           io.to(match.p1).emit('move_made', movePayload);
           io.to(match.p2).emit('move_made', movePayload);
           io.to(`spectate_${match.id}`).emit('move_made', movePayload);

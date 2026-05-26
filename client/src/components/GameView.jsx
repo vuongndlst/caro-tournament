@@ -3,6 +3,7 @@ import confetti from 'canvas-confetti';
 import { useGame } from '../context/GameContext';
 import Board from './Board';
 import ChessBoard from './ChessBoard';
+import ChessClock from './ChessClock';
 import TimerBar from './TimerBar';
 import Countdown from './Countdown';
 import EmojiReactions from './EmojiReactions';
@@ -13,6 +14,44 @@ import {
   Trophy, Handshake, Skull, ChevronRight, Swords,
   Volume2, VolumeX, Clock, TrendingUp, LayoutList, X, WifiOff
 } from 'lucide-react';
+
+// ── Material advantage helper ──────────────────────────────────────────────────
+const PIECE_VAL = { q: 9, r: 5, b: 3, n: 3, p: 1 };
+function calcMaterial(fen) {
+  if (!fen || typeof fen !== 'string') return { white: 0, black: 0 };
+  let w = 0, b = 0;
+  for (const ch of fen.split(' ')[0]) {
+    if (ch === '/') continue;
+    const v = PIECE_VAL[ch.toLowerCase()];
+    if (v) { if (ch === ch.toUpperCase()) w += v; else b += v; }
+  }
+  return { white: w, black: b };
+}
+// Captured piece symbols (opponent's lost pieces shown as icons)
+const CAPTURED_SYMBOLS = { q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+const STARTING = { q: 1, r: 2, b: 2, n: 2, p: 8 };
+function getCapturedPieces(fen, capturedBy) {
+  // capturedBy: 'white' → count black pieces missing; 'black' → count white pieces missing
+  if (!fen || typeof fen !== 'string') return [];
+  const board = fen.split(' ')[0];
+  const cnt = { wq:0,wr:0,wb:0,wn:0,wp:0, bq:0,br:0,bb:0,bn:0,bp:0 };
+  for (const ch of board) {
+    if (ch==='Q')cnt.wq++; else if(ch==='R')cnt.wr++; else if(ch==='B')cnt.wb++;
+    else if(ch==='N')cnt.wn++; else if(ch==='P')cnt.wp++;
+    else if(ch==='q')cnt.bq++; else if(ch==='r')cnt.br++; else if(ch==='b')cnt.bb++;
+    else if(ch==='n')cnt.bn++; else if(ch==='p')cnt.bp++;
+  }
+  // White captured = missing black pieces
+  // Black captured = missing white pieces
+  const source = capturedBy === 'white'
+    ? { q: STARTING.q-cnt.bq, r: STARTING.r-cnt.br, b: STARTING.b-cnt.bb, n: STARTING.n-cnt.bn, p: STARTING.p-cnt.bp }
+    : { q: STARTING.q-cnt.wq, r: STARTING.r-cnt.wr, b: STARTING.b-cnt.wb, n: STARTING.n-cnt.wn, p: STARTING.p-cnt.wp };
+  const icons = [];
+  ['q','r','b','n','p'].forEach(t => {
+    for (let i=0;i<Math.max(0,source[t]);i++) icons.push(CAPTURED_SYMBOLS[t]);
+  });
+  return icons;
+}
 
 // ── Rank badge ─────────────────────────────────────────────────────────────────
 const RANK_TEXT = {
@@ -344,123 +383,233 @@ export default function GameView() {
         </div>
       )}
 
-      {/* Match header */}
-      <div className="w-full max-w-3xl mb-3 animate-slide-down">
-        <div className="card py-3 px-4">
-          <div className="flex items-center justify-between gap-2">
+      {gameType === 'chess' ? (
+        /* ══════════════════════════════════════════════════════════════════════
+           CHESS LAYOUT: opponent block → material → board → material → my block
+           ══════════════════════════════════════════════════════════════════════ */
+        (() => {
+          // Which clock belongs to me?  X = p1, O = p2
+          const myTimeMs       = yourSymbol === 'X' ? currentMatch.p1TimeMs : currentMatch.p2TimeMs;
+          const oppTimeMs      = yourSymbol === 'X' ? currentMatch.p2TimeMs : currentMatch.p1TimeMs;
+          const myColor        = yourSymbol === 'X' ? 'white' : 'black';
+          const oppColor       = yourSymbol === 'X' ? 'black' : 'white';
+          const { white: wMat, black: bMat } = calcMaterial(board);
+          const myMat          = myColor  === 'white' ? wMat : bMat;
+          const oppMat         = oppColor === 'white' ? wMat : bMat;
+          const myAdvantage    = myMat  - oppMat;
+          const oppAdvantage   = oppMat - myMat;
+          const myCaptured     = getCapturedPieces(board, myColor);
+          const oppCaptured    = getCapturedPieces(board, oppColor);
 
-            {/* Me */}
-            <div className={`flex items-center gap-2 flex-1 min-w-0 transition-opacity duration-300 ${isMyTurn ? 'opacity-100' : 'opacity-40'}`}>
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm shrink-0 shadow-lg
-                ${gameType === 'chess'
-                  ? yourSymbol === 'X' ? 'bg-gradient-to-br from-slate-100 to-slate-300 text-slate-900 border-2 border-slate-400'
-                                       : 'bg-gradient-to-br from-slate-700 to-slate-900 text-white border-2 border-slate-500'
-                  : yourSymbol === 'X' ? 'bg-gradient-to-br from-blue-400 to-blue-700 text-white'
-                                       : 'bg-gradient-to-br from-red-400 to-red-700 text-white'}`}>
-                {gameType === 'chess' ? (yourSymbol === 'X' ? '♔' : '♚') : yourSymbol}
+          return (
+            <div className="w-full max-w-[540px] mx-auto flex flex-col gap-1.5 animate-fade-in">
+
+              {/* ── Opponent row ──────────────────────────────────────────────── */}
+              <div className={`flex items-center gap-3 px-3 py-2 rounded-xl border transition-all duration-300
+                ${!isMyTurn
+                  ? 'bg-amber-900/20 border-amber-700/40 shadow-md'
+                  : 'bg-slate-800/50 border-slate-700/30 opacity-70'}`}>
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-base shrink-0
+                  ${yourSymbol === 'X'
+                    ? 'bg-gradient-to-br from-slate-700 to-slate-900 text-white border-2 border-slate-500'
+                    : 'bg-gradient-to-br from-slate-100 to-slate-300 text-slate-900 border-2 border-slate-400'}`}>
+                  {yourSymbol === 'X' ? '♚' : '♔'}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-sm text-slate-200 truncate leading-none">
+                    {opponentStreak >= 2 && <span className="mr-1 text-orange-400 text-xs">🔥{opponentStreak}</span>}
+                    {opponentNickname}
+                  </p>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <RankBadge rank={opponentScore?.rank} />
+                    {/* Captured pieces */}
+                    {oppCaptured.length > 0 && (
+                      <span className="text-slate-400 text-xs leading-none tracking-tighter ml-1">
+                        {oppCaptured.join('')}
+                        {oppAdvantage > 0 && <span className="ml-0.5 text-slate-500">+{oppAdvantage}</span>}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {!isMyTurn && (
+                  <span className="badge bg-amber-900/60 text-amber-300 text-xs shrink-0 animate-pulse-fast border border-amber-700/40">
+                    Đang nghĩ...
+                  </span>
+                )}
+                {oppTimeMs != null && (
+                  <ChessClock
+                    timeMs={oppTimeMs}
+                    isActive={!isMyTurn && !showCountdown}
+                    turnStartedAt={currentMatch.turnStartedAt}
+                  />
+                )}
               </div>
-              <div className="min-w-0">
-                <p className="font-bold text-sm truncate leading-tight">
-                  {nickname}
-                  {myStreak >= 2 && <span className="ml-1 text-orange-400 text-xs">🔥{myStreak}</span>}
-                </p>
-                <div className="flex items-center gap-1.5">
-                  <RankBadge rank={myScore?.rank} />
-                  {myRankPos > 0 && <span className="text-slate-500 text-[10px]">#{myRankPos}</span>}
+
+              {/* ── Board ────────────────────────────────────────────────────── */}
+              <ChessBoard
+                fen={board}
+                yourSymbol={yourSymbol}
+                isMyTurn={isMyTurn && !showCountdown}
+                onMove={handleChessMove}
+                disabled={playerStatus !== 'playing' || showCountdown}
+              />
+
+              {/* ── My row ───────────────────────────────────────────────────── */}
+              <div className={`flex items-center gap-3 px-3 py-2 rounded-xl border transition-all duration-300
+                ${isMyTurn
+                  ? 'bg-indigo-900/25 border-indigo-600/40 shadow-md'
+                  : 'bg-slate-800/50 border-slate-700/30 opacity-70'}`}>
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-base shrink-0
+                  ${yourSymbol === 'X'
+                    ? 'bg-gradient-to-br from-slate-100 to-slate-300 text-slate-900 border-2 border-slate-400'
+                    : 'bg-gradient-to-br from-slate-700 to-slate-900 text-white border-2 border-slate-500'}`}>
+                  {yourSymbol === 'X' ? '♔' : '♚'}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-sm text-indigo-300 truncate leading-none">
+                    {nickname}
+                    {myStreak >= 2 && <span className="ml-1 text-orange-400 text-xs">🔥{myStreak}</span>}
+                  </p>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <RankBadge rank={myScore?.rank} />
+                    {/* Captured pieces */}
+                    {myCaptured.length > 0 && (
+                      <span className="text-slate-400 text-xs leading-none tracking-tighter ml-1">
+                        {myCaptured.join('')}
+                        {myAdvantage > 0 && <span className="ml-0.5 text-slate-500">+{myAdvantage}</span>}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {isMyTurn && (
+                  <span className="badge bg-green-900/70 text-green-300 text-xs shrink-0 animate-pulse-fast border border-green-700/50">
+                    Lượt bạn
+                  </span>
+                )}
+                {myTimeMs != null && (
+                  <ChessClock
+                    timeMs={myTimeMs}
+                    isActive={isMyTurn && !showCountdown}
+                    turnStartedAt={currentMatch.turnStartedAt}
+                  />
+                )}
+              </div>
+
+              {/* ── Emoji reactions ───────────────────────────────────────────── */}
+              <div className="flex justify-end mt-1 pr-1">
+                <EmojiReactions onReact={sendReaction} incoming={incomingReaction} />
+              </div>
+            </div>
+          );
+        })()
+      ) : (
+        /* ══════════════════════════════════════════════════════════════════════
+           NON-CHESS LAYOUT (caro / tic-tac-toe)
+           ══════════════════════════════════════════════════════════════════════ */
+        <>
+          {/* Match header */}
+          <div className="w-full max-w-3xl mb-3 animate-slide-down">
+            <div className="card py-3 px-4">
+              <div className="flex items-center justify-between gap-2">
+
+                {/* Me */}
+                <div className={`flex items-center gap-2 flex-1 min-w-0 transition-opacity duration-300 ${isMyTurn ? 'opacity-100' : 'opacity-40'}`}>
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm shrink-0 shadow-lg
+                    ${yourSymbol === 'X' ? 'bg-gradient-to-br from-blue-400 to-blue-700 text-white'
+                                         : 'bg-gradient-to-br from-red-400 to-red-700 text-white'}`}>
+                    {yourSymbol}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-bold text-sm truncate leading-tight">
+                      {nickname}
+                      {myStreak >= 2 && <span className="ml-1 text-orange-400 text-xs">🔥{myStreak}</span>}
+                    </p>
+                    <div className="flex items-center gap-1.5">
+                      <RankBadge rank={myScore?.rank} />
+                      {myRankPos > 0 && <span className="text-slate-500 text-[10px]">#{myRankPos}</span>}
+                    </div>
+                  </div>
+                  {isMyTurn && (
+                    <span className="badge bg-green-900/70 text-green-300 text-xs ml-auto shrink-0 animate-pulse-fast border border-green-700/50">
+                      Lượt bạn
+                    </span>
+                  )}
+                </div>
+
+                {/* VS */}
+                <div className="flex flex-col items-center shrink-0 px-2">
+                  <Swords className="w-4 h-4 text-slate-500" />
+                  <span className="text-[10px] text-slate-600 font-bold tracking-widest">VS</span>
+                </div>
+
+                {/* Opponent */}
+                <div className={`flex items-center gap-2 flex-1 min-w-0 flex-row-reverse transition-opacity duration-300 ${!isMyTurn ? 'opacity-100' : 'opacity-40'}`}>
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm shrink-0 shadow-lg
+                    ${yourSymbol === 'X' ? 'bg-gradient-to-br from-red-400 to-red-700 text-white'
+                                         : 'bg-gradient-to-br from-blue-400 to-blue-700 text-white'}`}>
+                    {yourSymbol === 'X' ? 'O' : 'X'}
+                  </div>
+                  <div className="min-w-0 text-right">
+                    <p className="font-bold text-sm truncate leading-tight">
+                      {opponentStreak >= 2 && <span className="mr-1 text-orange-400 text-xs">🔥{opponentStreak}</span>}
+                      {opponentNickname}
+                    </p>
+                    <div className="flex items-center gap-1.5 justify-end">
+                      {opponentRankPos > 0 && <span className="text-slate-500 text-[10px]">#{opponentRankPos}</span>}
+                      <RankBadge rank={opponentScore?.rank} />
+                    </div>
+                  </div>
+                  {!isMyTurn && (
+                    <span className="badge bg-amber-900/60 text-amber-300 text-xs mr-auto shrink-0 animate-pulse-fast border border-amber-700/40">
+                      Đang nghĩ...
+                    </span>
+                  )}
                 </div>
               </div>
-              {isMyTurn && (
-                <span className="badge bg-green-900/70 text-green-300 text-xs ml-auto shrink-0 animate-pulse-fast border border-green-700/50">
-                  Lượt bạn
-                </span>
-              )}
-            </div>
 
-            {/* VS */}
-            <div className="flex flex-col items-center shrink-0 px-2">
-              <Swords className="w-4 h-4 text-slate-500" />
-              <span className="text-[10px] text-slate-600 font-bold tracking-widest">VS</span>
-            </div>
-
-            {/* Opponent */}
-            <div className={`flex items-center gap-2 flex-1 min-w-0 flex-row-reverse transition-opacity duration-300 ${!isMyTurn ? 'opacity-100' : 'opacity-40'}`}>
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm shrink-0 shadow-lg
-                ${gameType === 'chess'
-                  ? yourSymbol === 'X' ? 'bg-gradient-to-br from-slate-700 to-slate-900 text-white border-2 border-slate-500'
-                                       : 'bg-gradient-to-br from-slate-100 to-slate-300 text-slate-900 border-2 border-slate-400'
-                  : yourSymbol === 'X' ? 'bg-gradient-to-br from-red-400 to-red-700 text-white'
-                                       : 'bg-gradient-to-br from-blue-400 to-blue-700 text-white'}`}>
-                {gameType === 'chess' ? (yourSymbol === 'X' ? '♚' : '♔') : (yourSymbol === 'X' ? 'O' : 'X')}
-              </div>
-              <div className="min-w-0 text-right">
-                <p className="font-bold text-sm truncate leading-tight">
-                  {opponentStreak >= 2 && <span className="mr-1 text-orange-400 text-xs">🔥{opponentStreak}</span>}
-                  {opponentNickname}
-                </p>
-                <div className="flex items-center gap-1.5 justify-end">
-                  {opponentRankPos > 0 && <span className="text-slate-500 text-[10px]">#{opponentRankPos}</span>}
-                  <RankBadge rank={opponentScore?.rank} />
+              {/* Timer */}
+              {currentMatch.turnStartedAt && !showCountdown && (
+                <div className="mt-3 pt-3 border-t border-slate-700/60">
+                  <TimerBar
+                    key={currentMatch.turnStartedAt}
+                    turnStartedAt={currentMatch.turnStartedAt}
+                    turnDurationMs={currentMatch.turnDurationMs || 30000}
+                    isMyTurn={isMyTurn}
+                  />
                 </div>
-              </div>
-              {!isMyTurn && (
-                <span className="badge bg-amber-900/60 text-amber-300 text-xs mr-auto shrink-0 animate-pulse-fast border border-amber-700/40">
-                  Đang nghĩ...
-                </span>
               )}
             </div>
           </div>
 
-          {/* Timer */}
-          {currentMatch.turnStartedAt && !showCountdown && (
-            <div className="mt-3 pt-3 border-t border-slate-700/60">
-              <TimerBar
-                key={currentMatch.turnStartedAt}
-                turnStartedAt={currentMatch.turnStartedAt}
-                turnDurationMs={currentMatch.turnDurationMs || 30000}
-                isMyTurn={isMyTurn}
-              />
+          {/* Board */}
+          <div className="w-full max-w-3xl animate-fade-in">
+            <Board
+              board={board}
+              size={size}
+              gameType={currentMatch?.gameType}
+              yourSymbol={yourSymbol}
+              isMyTurn={isMyTurn && !showCountdown}
+              onCellClick={handleCellClick}
+              disabled={playerStatus !== 'playing' || showCountdown}
+              winningCells={winningCells}
+            />
+          </div>
+
+          {/* Bottom bar */}
+          <div className="w-full max-w-3xl mt-3 flex items-center justify-between gap-3">
+            <p className="text-sm text-slate-500">
+              {isMyTurn
+                ? <span className="text-indigo-300 font-medium animate-pulse-fast">
+                    Đến lượt bạn — hãy chọn ô để đánh!
+                  </span>
+                : `Đang chờ ${opponentNickname} đánh...`}
+            </p>
+            <div className="relative shrink-0">
+              <EmojiReactions onReact={sendReaction} incoming={incomingReaction} />
             </div>
-          )}
-        </div>
-      </div>
-
-      {/* Board */}
-      <div className="w-full max-w-3xl animate-fade-in">
-        {currentMatch?.gameType === 'chess' ? (
-          <ChessBoard
-            fen={board}
-            yourSymbol={yourSymbol}
-            isMyTurn={isMyTurn && !showCountdown}
-            onMove={handleChessMove}
-            disabled={playerStatus !== 'playing' || showCountdown}
-          />
-        ) : (
-          <Board
-            board={board}
-            size={size}
-            gameType={currentMatch?.gameType}
-            yourSymbol={yourSymbol}
-            isMyTurn={isMyTurn && !showCountdown}
-            onCellClick={handleCellClick}
-            disabled={playerStatus !== 'playing' || showCountdown}
-            winningCells={winningCells}
-          />
-        )}
-      </div>
-
-      {/* Bottom bar */}
-      <div className="w-full max-w-3xl mt-3 flex items-center justify-between gap-3">
-        <p className="text-sm text-slate-500">
-          {isMyTurn
-            ? <span className="text-indigo-300 font-medium animate-pulse-fast">
-                {gameType === 'chess' ? 'Đến lượt bạn — hãy di chuyển quân cờ!' : 'Đến lượt bạn — hãy chọn ô để đánh!'}
-              </span>
-            : `Đang chờ ${opponentNickname} ${gameType === 'chess' ? 'suy nghĩ' : 'đánh'}...`}
-        </p>
-        <div className="relative shrink-0">
-          <EmojiReactions onReact={sendReaction} incoming={incomingReaction} />
-        </div>
-      </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -49,27 +49,37 @@ function reducer(state, action) {
     case 'ROOM_STATE_UPDATE':
       return { ...state, tournamentState: action.payload };
 
-    case 'MATCH_FOUND':
+    case 'MATCH_FOUND': {
+      // Auto-detect gameType in case server omits it (fallback)
+      const payload = action.payload;
+      const detectedType = payload.gameType ||
+        (typeof payload.board === 'string' ? 'chess' :
+         payload.size === 3 ? 'tictactoe' : 'caro');
       return {
         ...state,
         currentMatch: {
-          matchId:          action.payload.matchId,
-          gameType:         action.payload.gameType || 'caro',
-          opponentNickname: action.payload.opponentNickname,
-          opponentId:       action.payload.opponentId,
-          yourSymbol:       action.payload.yourSymbol,
-          opponentSymbol:   action.payload.opponentSymbol,
-          currentTurn:      action.payload.currentTurn,
-          board:            action.payload.board,
-          size:             action.payload.size,
-          turnStartedAt:    action.payload.turnStartedAt || Date.now(),
-          turnDurationMs:   action.payload.turnDurationMs || 30000,
+          matchId:          payload.matchId,
+          gameType:         detectedType,
+          opponentNickname: payload.opponentNickname,
+          opponentId:       payload.opponentId,
+          yourSymbol:       payload.yourSymbol,
+          opponentSymbol:   payload.opponentSymbol,
+          currentTurn:      payload.currentTurn,
+          board:            payload.board,
+          size:             payload.size,
+          turnStartedAt:    payload.turnStartedAt || Date.now(),
+          turnDurationMs:   payload.turnDurationMs || 30000,
+          // Chess per-player clocks (null for non-chess)
+          p1TimeMs:         payload.p1TimeMs  ?? null,
+          p2TimeMs:         payload.p2TimeMs  ?? null,
+          chessIncMs:       payload.chessIncMs ?? null,
         },
         gameResult:       null,
         playerStatus:     'playing',
         showCountdown:    true,
         incomingReaction: null,
       };
+    }
 
     case 'HIDE_COUNTDOWN':
       return { ...state, showCountdown: false };
@@ -80,9 +90,12 @@ function reducer(state, action) {
         ...state,
         currentMatch: {
           ...state.currentMatch,
-          currentTurn:   action.payload.currentTurn,
-          turnStartedAt: action.payload.turnStartedAt || Date.now(),
+          currentTurn:    action.payload.currentTurn,
+          turnStartedAt:  action.payload.turnStartedAt || Date.now(),
           turnDurationMs: action.payload.turnDurationMs || 30000,
+          // Chess clocks: update if server sent them
+          p1TimeMs:  action.payload.p1TimeMs  ?? state.currentMatch.p1TimeMs,
+          p2TimeMs:  action.payload.p2TimeMs  ?? state.currentMatch.p2TimeMs,
         },
       };
 
@@ -95,6 +108,9 @@ function reducer(state, action) {
           board:         action.payload.board,
           currentTurn:   action.payload.currentTurn,
           turnStartedAt: Date.now(),
+          // Chess clocks: update if server sent them
+          p1TimeMs:  action.payload.p1TimeMs  ?? state.currentMatch.p1TimeMs,
+          p2TimeMs:  action.payload.p2TimeMs  ?? state.currentMatch.p2TimeMs,
         },
       };
 
@@ -184,7 +200,8 @@ export function GameProvider({ children }) {
     });
 
     socket.on('move_made', (data) => {
-      if (data.row !== null) sounds.place();
+      // Play move sound for both board (row/col) and chess (move object) moves
+      if (data.row !== null || data.move) sounds.place();
       dispatch({ type: 'MOVE_MADE', payload: data });
     });
 
@@ -230,9 +247,11 @@ export function GameProvider({ children }) {
     };
   }, []);
 
-  const createTournament = useCallback((token, name, gameType, callback) => {
+  const createTournament = useCallback((token, name, gameType, chessOpts, callback) => {
+    // chessOpts: { chessInitialMs, chessIncMs } — optional, only for chess
+    if (typeof chessOpts === 'function') { callback = chessOpts; chessOpts = {}; }
     if (token) socket.auth = { token };
-    socket.emit('create_tournament', { token, name, gameType }, (res) => {
+    socket.emit('create_tournament', { token, name, gameType, ...chessOpts }, (res) => {
       if (res.success) dispatch({ type: 'ADMIN_CREATED', payload: res });
       callback?.(res);
     });

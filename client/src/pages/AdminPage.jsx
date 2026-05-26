@@ -13,6 +13,29 @@ export default function AdminPage() {
   const [error,         setError]         = useState('');
   const [tournamentName, setTournamentName] = useState('');
   const [gameType, setGameType] = useState('caro');
+  // Chess time controls
+  const [chessPreset, setChessPreset] = useState('5+3'); // '3+0' | '5+3' | '10+5' | 'custom'
+  const [chessCustomMin, setChessCustomMin] = useState(5);
+  const [chessCustomInc, setChessCustomInc] = useState(3);
+
+  const CHESS_PRESETS = {
+    '3+0':  { label: '3 phút · 0s',   initialMs: 3 * 60 * 1000, incMs: 0 },
+    '5+3':  { label: '5 phút · +3s',  initialMs: 5 * 60 * 1000, incMs: 3_000 },
+    '10+5': { label: '10 phút · +5s', initialMs: 10 * 60 * 1000, incMs: 5_000 },
+    'custom': { label: 'Tuỳ chỉnh', initialMs: null, incMs: null },
+  };
+
+  const getChessOpts = () => {
+    if (gameType !== 'chess') return {};
+    if (chessPreset === 'custom') {
+      return {
+        chessInitialMs: Math.max(1, chessCustomMin) * 60 * 1000,
+        chessIncMs: Math.max(0, chessCustomInc) * 1000,
+      };
+    }
+    const p = CHESS_PRESETS[chessPreset];
+    return { chessInitialMs: p.initialMs, chessIncMs: p.incMs };
+  };
 
   // If token exists, verify it on mount
   useEffect(() => {
@@ -53,7 +76,7 @@ export default function AdminPage() {
   const handleCreate = () => {
     setLoading(true);
     setError('');
-    createTournament(adminToken, tournamentName.trim(), gameType, (res) => {
+    createTournament(adminToken, tournamentName.trim(), gameType, getChessOpts(), (res) => {
       setLoading(false);
       if (!res.success) setError(res.message || 'Không thể tạo giải đấu, thử lại!');
     });
@@ -105,7 +128,7 @@ export default function AdminPage() {
 
         {/* Game Type select */}
         <div className="mb-4">
-          <label className="block text-sm font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">
             Loại trò chơi
           </label>
           <select
@@ -118,6 +141,59 @@ export default function AdminPage() {
             <option value="chess">Cờ Vua (8x8)</option>
           </select>
         </div>
+
+        {/* Chess time controls */}
+        {gameType === 'chess' && (
+          <div className="mb-4 bg-slate-800/60 rounded-xl p-3 border border-slate-700/50">
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              ⏱ Thời gian cờ vua
+            </label>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              {Object.entries(CHESS_PRESETS).map(([key, { label }]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setChessPreset(key)}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors border ${
+                    chessPreset === key
+                      ? 'bg-indigo-600 border-indigo-500 text-white'
+                      : 'bg-slate-700/50 border-slate-600/50 text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {chessPreset === 'custom' && (
+              <div className="flex gap-3 mt-2">
+                <div className="flex-1">
+                  <label className="block text-xs text-slate-400 mb-1">Giờ mỗi người (phút)</label>
+                  <input
+                    type="number" min="1" max="60"
+                    className="input-field text-sm py-1.5"
+                    value={chessCustomMin}
+                    onChange={e => setChessCustomMin(Number(e.target.value))}
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs text-slate-400 mb-1">Cộng mỗi nước (giây)</label>
+                  <input
+                    type="number" min="0" max="60"
+                    className="input-field text-sm py-1.5"
+                    value={chessCustomInc}
+                    onChange={e => setChessCustomInc(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+            )}
+            {chessPreset !== 'custom' && (
+              <p className="text-xs text-slate-500 mt-1">
+                Mỗi người {CHESS_PRESETS[chessPreset].initialMs / 60000} phút
+                {CHESS_PRESETS[chessPreset].incMs > 0 ? `, +${CHESS_PRESETS[chessPreset].incMs/1000}s mỗi nước` : ''}
+              </p>
+            )}
+          </div>
+        )}
 
         <button
           onClick={handleCreate}
