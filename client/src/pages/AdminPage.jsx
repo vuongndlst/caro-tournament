@@ -12,6 +12,7 @@ export default function AdminPage() {
   const [loading,       setLoading]       = useState(false);
   const [error,         setError]         = useState('');
   const [tournamentName, setTournamentName] = useState('');
+  const [gameType, setGameType] = useState('caro');
 
   // If token exists, verify it on mount
   useEffect(() => {
@@ -52,7 +53,7 @@ export default function AdminPage() {
   const handleCreate = () => {
     setLoading(true);
     setError('');
-    createTournament(adminToken, tournamentName.trim(), (res) => {
+    createTournament(adminToken, tournamentName.trim(), gameType, (res) => {
       setLoading(false);
       if (!res.success) setError(res.message || 'Không thể tạo giải đấu, thử lại!');
     });
@@ -100,6 +101,22 @@ export default function AdminPage() {
             autoFocus
           />
           <p className="text-xs text-slate-500 mt-1">Để trống để dùng tên mặc định theo ngày.</p>
+        </div>
+
+        {/* Game Type select */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
+            Loại trò chơi
+          </label>
+          <select
+            className="input-field appearance-none cursor-pointer bg-slate-800"
+            value={gameType}
+            onChange={e => setGameType(e.target.value)}
+          >
+            <option value="caro">Cờ Caro (15x15)</option>
+            <option value="tictactoe">Tic Tac Toe (3x3)</option>
+            <option value="chess">Cờ Vua (8x8)</option>
+          </select>
         </div>
 
         <button

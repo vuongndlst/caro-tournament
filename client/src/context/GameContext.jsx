@@ -54,6 +54,7 @@ function reducer(state, action) {
         ...state,
         currentMatch: {
           matchId:          action.payload.matchId,
+          gameType:         action.payload.gameType || 'caro',
           opponentNickname: action.payload.opponentNickname,
           opponentId:       action.payload.opponentId,
           yourSymbol:       action.payload.yourSymbol,
@@ -229,9 +230,9 @@ export function GameProvider({ children }) {
     };
   }, []);
 
-  const createTournament = useCallback((token, name, callback) => {
+  const createTournament = useCallback((token, name, gameType, callback) => {
     if (token) socket.auth = { token };
-    socket.emit('create_tournament', { token, name }, (res) => {
+    socket.emit('create_tournament', { token, name, gameType }, (res) => {
       if (res.success) dispatch({ type: 'ADMIN_CREATED', payload: res });
       callback?.(res);
     });
@@ -258,8 +259,8 @@ export function GameProvider({ children }) {
     });
   }, []);
 
-  const makeMove = useCallback((matchId, row, col, callback) => {
-    socket.emit('make_move', { matchId, row, col }, callback);
+  const makeMove = useCallback((matchId, row, col, move, callback) => {
+    socket.emit('make_move', { matchId, row, col, move }, callback);
   }, []);
 
   const sendReaction = useCallback((emoji) => {

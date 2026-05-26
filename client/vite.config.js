@@ -5,11 +5,14 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    // Dev proxy: forward /socket.io to local backend
+    // Dev proxy: forward /socket.io and /api to local backend
     proxy: {
       '/socket.io': {
         target: 'http://localhost:3001',
         ws: true,
+      },
+      '/api': {
+        target: 'http://localhost:3001',
       },
     },
   },

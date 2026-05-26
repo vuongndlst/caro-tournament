@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import confetti from 'canvas-confetti';
 import { useGame } from '../context/GameContext';
 import Board from './Board';
+import ChessBoard from './ChessBoard';
 import TimerBar from './TimerBar';
 import Countdown from './Countdown';
 import EmojiReactions from './EmojiReactions';
@@ -61,6 +62,8 @@ export default function GameView() {
     hideCountdown, opponentReconnecting,
   } = useGame();
 
+  const board = currentMatch?.board;
+
   const [muted,           setMuted]           = useState(isMuted());
   const [timedOutMsg,     setTimedOutMsg]      = useState('');
   const [showLeaderboard, setShowLeaderboard]  = useState(false);
@@ -74,11 +77,15 @@ export default function GameView() {
   );
 
   const handleCellClick = useCallback((row, col) => {
-    if (!currentMatch || playerStatus !== 'playing') return;
-    if (currentMatch.currentTurn !== playerId) return;
-    if (currentMatch.board[row][col] !== null) return;
-    makeMove(currentMatch.matchId, row, col);
-  }, [currentMatch, playerId, playerStatus, makeMove]);
+    if (playerStatus !== 'playing' || currentMatch?.currentTurn !== playerId || showCountdown) return;
+    if (!board || board[row][col] !== null) return;
+    makeMove(currentMatch.matchId, row, col, null);
+  }, [currentMatch, playerId, playerStatus, makeMove, board, showCountdown]);
+
+  const handleChessMove = useCallback((move) => {
+    if (playerStatus !== 'playing' || currentMatch?.currentTurn !== playerId || showCountdown) return;
+    makeMove(currentMatch.matchId, null, null, move);
+  }, [currentMatch, playerId, playerStatus, makeMove, showCountdown]);
 
   // Game background music
   useEffect(() => {
@@ -271,15 +278,26 @@ export default function GameView() {
         {board && (
           <div className="w-full max-w-3xl animate-fade-in opacity-60 hover:opacity-100 transition-opacity">
             <p className="text-center text-xs text-slate-500 mb-2">Trạng thái bàn cờ cuối trận</p>
-            <Board
-              board={board}
-              size={currentMatch?.size || 15}
-              yourSymbol={currentMatch?.yourSymbol || 'X'}
-              isMyTurn={false}
-              onCellClick={() => {}}
-              disabled={true}
-              winningCells={winningCells}
-            />
+            {currentMatch?.gameType === 'chess' ? (
+              <ChessBoard
+                fen={board}
+                yourSymbol={currentMatch?.yourSymbol || 'X'}
+                isMyTurn={false}
+                onMove={() => {}}
+                disabled={true}
+              />
+            ) : (
+              <Board
+                board={board}
+                size={currentMatch?.size || 15}
+                gameType={currentMatch?.gameType}
+                yourSymbol={currentMatch?.yourSymbol || 'X'}
+                isMyTurn={false}
+                onCellClick={() => {}}
+                disabled={true}
+                winningCells={winningCells}
+              />
+            )}
           </div>
         )}
       </div>
@@ -288,7 +306,7 @@ export default function GameView() {
 
   if (!currentMatch) return null;
 
-  const { opponentNickname, yourSymbol, board, size, winningCells } = currentMatch;
+  const { opponentNickname, yourSymbol, size, winningCells, gameType } = currentMatch;
   const myStreak       = myScore?.streak || 0;
   const opponentStreak = opponentScore?.streak || 0;
 
@@ -334,8 +352,12 @@ export default function GameView() {
             {/* Me */}
             <div className={`flex items-center gap-2 flex-1 min-w-0 transition-opacity duration-300 ${isMyTurn ? 'opacity-100' : 'opacity-40'}`}>
               <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm shrink-0 shadow-lg
-                ${yourSymbol === 'X' ? 'bg-gradient-to-br from-blue-400 to-blue-700 text-white' : 'bg-gradient-to-br from-red-400 to-red-700 text-white'}`}>
-                {yourSymbol}
+                ${gameType === 'chess'
+                  ? yourSymbol === 'X' ? 'bg-gradient-to-br from-slate-100 to-slate-300 text-slate-900 border-2 border-slate-400'
+                                       : 'bg-gradient-to-br from-slate-700 to-slate-900 text-white border-2 border-slate-500'
+                  : yourSymbol === 'X' ? 'bg-gradient-to-br from-blue-400 to-blue-700 text-white'
+                                       : 'bg-gradient-to-br from-red-400 to-red-700 text-white'}`}>
+                {gameType === 'chess' ? (yourSymbol === 'X' ? '♔' : '♚') : yourSymbol}
               </div>
               <div className="min-w-0">
                 <p className="font-bold text-sm truncate leading-tight">
@@ -363,8 +385,12 @@ export default function GameView() {
             {/* Opponent */}
             <div className={`flex items-center gap-2 flex-1 min-w-0 flex-row-reverse transition-opacity duration-300 ${!isMyTurn ? 'opacity-100' : 'opacity-40'}`}>
               <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm shrink-0 shadow-lg
-                ${yourSymbol === 'X' ? 'bg-gradient-to-br from-red-400 to-red-700 text-white' : 'bg-gradient-to-br from-blue-400 to-blue-700 text-white'}`}>
-                {yourSymbol === 'X' ? 'O' : 'X'}
+                ${gameType === 'chess'
+                  ? yourSymbol === 'X' ? 'bg-gradient-to-br from-slate-700 to-slate-900 text-white border-2 border-slate-500'
+                                       : 'bg-gradient-to-br from-slate-100 to-slate-300 text-slate-900 border-2 border-slate-400'
+                  : yourSymbol === 'X' ? 'bg-gradient-to-br from-red-400 to-red-700 text-white'
+                                       : 'bg-gradient-to-br from-blue-400 to-blue-700 text-white'}`}>
+                {gameType === 'chess' ? (yourSymbol === 'X' ? '♚' : '♔') : (yourSymbol === 'X' ? 'O' : 'X')}
               </div>
               <div className="min-w-0 text-right">
                 <p className="font-bold text-sm truncate leading-tight">
@@ -400,23 +426,36 @@ export default function GameView() {
 
       {/* Board */}
       <div className="w-full max-w-3xl animate-fade-in">
-        <Board
-          board={board}
-          size={size}
-          yourSymbol={yourSymbol}
-          isMyTurn={isMyTurn && !showCountdown}
-          onCellClick={handleCellClick}
-          disabled={playerStatus !== 'playing' || showCountdown}
-          winningCells={winningCells}
-        />
+        {currentMatch?.gameType === 'chess' ? (
+          <ChessBoard
+            fen={board}
+            yourSymbol={yourSymbol}
+            isMyTurn={isMyTurn && !showCountdown}
+            onMove={handleChessMove}
+            disabled={playerStatus !== 'playing' || showCountdown}
+          />
+        ) : (
+          <Board
+            board={board}
+            size={size}
+            gameType={currentMatch?.gameType}
+            yourSymbol={yourSymbol}
+            isMyTurn={isMyTurn && !showCountdown}
+            onCellClick={handleCellClick}
+            disabled={playerStatus !== 'playing' || showCountdown}
+            winningCells={winningCells}
+          />
+        )}
       </div>
 
       {/* Bottom bar */}
       <div className="w-full max-w-3xl mt-3 flex items-center justify-between gap-3">
         <p className="text-sm text-slate-500">
           {isMyTurn
-            ? <span className="text-indigo-300 font-medium animate-pulse-fast">Đến lượt bạn — hãy chọn ô để đánh!</span>
-            : `Đang chờ ${opponentNickname} đánh...`}
+            ? <span className="text-indigo-300 font-medium animate-pulse-fast">
+                {gameType === 'chess' ? 'Đến lượt bạn — hãy di chuyển quân cờ!' : 'Đến lượt bạn — hãy chọn ô để đánh!'}
+              </span>
+            : `Đang chờ ${opponentNickname} ${gameType === 'chess' ? 'suy nghĩ' : 'đánh'}...`}
         </p>
         <div className="relative shrink-0">
           <EmojiReactions onReact={sendReaction} incoming={incomingReaction} />

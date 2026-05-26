@@ -10,6 +10,7 @@
 const { io: ioClient } = require('socket.io-client');
 const https = require('https');
 const http  = require('http');
+const { Chess } = require('chess.js');
 
 // Override server URL from CLI arg
 const SERVER_URL_ARG = process.argv[2];
@@ -34,6 +35,7 @@ function httpRequest(url, opts = {}) {
 }
 
 const SERVER_URL = process.argv[2] || 'http://localhost:3001';
+const GAME_TYPE = process.argv[3] || 'caro';
 const ADMIN_USER = process.env.TEACHER_USERNAME || 'giaovien';
 const ADMIN_PASS = process.env.TEACHER_PASSWORD || 'lsts@2024';
 const NUM_PLAYERS = 20;
@@ -76,6 +78,13 @@ const stats = {
 
 // ── Smart move helper — plays near existing stones so games end quickly ────────
 function pickSmartMove(board, size) {
+  if (GAME_TYPE === 'chess') {
+    const chess = new Chess(board);
+    const moves = chess.moves({ verbose: true });
+    if (moves.length === 0) return null;
+    return moves[Math.floor(Math.random() * moves.length)];
+  }
+
   const center = Math.floor(size / 2);
   const empty  = [];
   const nearStones = new Set();
@@ -189,15 +198,20 @@ function createPlayer(nickname, roomCode, adminSocket) {
     function makeNextMove() {
       if (!currentMatch || currentMatch.currentTurn !== socket.id) return;
       const move = pickSmartMove(currentMatch.board, currentMatch.size || 15);
-      if (!move) return;
+      if (!move) { warn(`${nickname} NO VALID MOVE FOUND!`); return; }
 
       setTimeout(() => {
         if (!currentMatch || currentMatch.currentTurn !== socket.id) return;
-        socket.emit('make_move', {
-          matchId: currentMatch.matchId,
-          row: move[0],
-          col: move[1],
-        }, (res) => {
+        
+        const payload = { matchId: currentMatch.matchId };
+        if (GAME_TYPE === 'chess') {
+          payload.move = move; // verbose move object
+        } else {
+          payload.row = move[0];
+          payload.col = move[1];
+        }
+
+        socket.emit('make_move', payload, (res) => {
           if (res && !res.success) {
             // Move was rejected — try again with a fresh pick
             if (res.message !== 'Chưa đến lượt bạn!' && res.message !== 'Trận đấu không hợp lệ') {
@@ -232,7 +246,7 @@ async function createAdmin() {
 
     admin.on('connect_error', reject);
     admin.on('connect', () => {
-      admin.emit('create_tournament', { token, name: 'Giả lập 20 người chơi' }, (res) => {
+      admin.emit('create_tournament', { token, name: `Giả lập (${GAME_TYPE})`, gameType: GAME_TYPE }, (res) => {
         if (!res.success) return reject(new Error(`Cannot create tournament: ${res.message}`));
         ok(`Giải đấu tạo thành công — mã phòng: ${C.bold}${C.yellow}${res.roomCode}${C.reset}`);
         resolve({ admin, roomCode: res.roomCode, token });
@@ -261,7 +275,7 @@ function printLeaderboard(leaderboard) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log('\n' + C.bold + C.cyan + '🎮  CaroTourney — Tournament Simulation' + C.reset);
+  console.log('\n' + C.bold + C.cyan + `🎮  CaroTourney — Tournament Simulation (${GAME_TYPE})` + C.reset);
   console.log(C.dim + `   ${NUM_PLAYERS} học sinh · ${ROUND_LIMIT} vòng tối đa · server: ${SERVER_URL}\n` + C.reset);
 
   let admin, roomCode, token;

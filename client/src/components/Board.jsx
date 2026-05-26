@@ -7,17 +7,17 @@ const STAR_POINTS_15 = new Set([
   '11,3','11,7','11,11',
 ]);
 
-const CELL_SIZE_MAP = { 15: 36, 20: 28 };
+const CELL_SIZE_MAP = { 3: 90, 15: 36, 20: 28 };
 
-export default function Board({ board, size = 15, yourSymbol, isMyTurn, onCellClick, disabled, winningCells }) {
+export default function Board({ board, size = 15, gameType = 'caro', yourSymbol, isMyTurn, onCellClick, disabled, winningCells }) {
   const cellPx = CELL_SIZE_MAP[size] ?? 32;
+  const isTTT = gameType === 'tictactoe';
 
   const winSet = useMemo(() => {
     if (!winningCells) return new Set();
     return new Set(winningCells.map(([r, c]) => `${r},${c}`));
   }, [winningCells]);
 
-  const opponentSymbol = yourSymbol === 'X' ? 'O' : 'X';
   const canClick = !disabled && isMyTurn;
 
   return (
@@ -25,12 +25,14 @@ export default function Board({ board, size = 15, yourSymbol, isMyTurn, onCellCl
       <div
         className="relative rounded-2xl overflow-hidden shadow-2xl shadow-black/50 shrink-0"
         style={{
-          background: 'linear-gradient(135deg, #3d1f0a 0%, #5c2e0e 40%, #3d1f0a 100%)',
-          padding: 10,
-          border: '2px solid #7c4a1e',
+          background: isTTT
+            ? 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)'
+            : 'linear-gradient(135deg, #3d1f0a 0%, #5c2e0e 40%, #3d1f0a 100%)',
+          padding: isTTT ? 16 : 10,
+          border: isTTT ? '2px solid #334155' : '2px solid #7c4a1e',
         }}
       >
-        {/* Outer wood frame glow */}
+        {/* Outer frame glow */}
         <div
           className="absolute inset-0 rounded-2xl pointer-events-none"
           style={{ boxShadow: 'inset 0 0 30px rgba(0,0,0,0.6)' }}
@@ -41,7 +43,7 @@ export default function Board({ board, size = 15, yourSymbol, isMyTurn, onCellCl
           style={{
             gridTemplateColumns: `repeat(${size}, ${cellPx}px)`,
             gridTemplateRows:    `repeat(${size}, ${cellPx}px)`,
-            gap: 0,
+            gap: isTTT ? 4 : 0,
           }}
         >
           {Array.from({ length: size * size }, (_, idx) => {
@@ -61,28 +63,36 @@ export default function Board({ board, size = 15, yourSymbol, isMyTurn, onCellCl
               <div
                 key={idx}
                 className="board-cell relative flex items-center justify-center select-none"
-                style={{ width: cellPx, height: cellPx, cursor: isEmpty && canClick ? 'pointer' : 'default' }}
+                style={{
+                  width: cellPx, height: cellPx,
+                  cursor: isEmpty && canClick ? 'pointer' : 'default',
+                  ...(isTTT ? {
+                    background: 'rgba(30,41,59,0.7)',
+                    borderRadius: 12,
+                    border: '1px solid rgba(71,85,105,0.5)',
+                  } : {}),
+                }}
                 onClick={() => isEmpty && canClick && onCellClick(r, c)}
               >
-                {/* Grid lines — only draw right & bottom half-lines so they meet at cell centers */}
-                {!isRightEdge && (
+                {/* Grid lines for Caro (Go-style) */}
+                {!isTTT && !isRightEdge && (
                   <div className="absolute pointer-events-none"
                     style={{ left: '50%', top: '50%', width: '50%', height: 1, background: 'rgba(180,120,60,0.45)', transform: 'translateY(-50%)' }} />
                 )}
-                {!isLeftEdge && (
+                {!isTTT && !isLeftEdge && (
                   <div className="absolute pointer-events-none"
                     style={{ right: '50%', top: '50%', width: '50%', height: 1, background: 'rgba(180,120,60,0.45)', transform: 'translateY(-50%)' }} />
                 )}
-                {!isBottomEdge && (
+                {!isTTT && !isBottomEdge && (
                   <div className="absolute pointer-events-none"
                     style={{ left: '50%', top: '50%', width: 1, height: '50%', background: 'rgba(180,120,60,0.45)', transform: 'translateX(-50%)' }} />
                 )}
-                {!isTopEdge && (
+                {!isTTT && !isTopEdge && (
                   <div className="absolute pointer-events-none"
                     style={{ left: '50%', bottom: '50%', width: 1, height: '50%', background: 'rgba(180,120,60,0.45)', transform: 'translateX(-50%)' }} />
                 )}
 
-                {/* Star point dot */}
+                {/* Star point dot (Caro only) */}
                 {isStar && isEmpty && (
                   <div className="absolute w-2 h-2 rounded-full bg-amber-800/80 pointer-events-none z-10"
                     style={{ transform: 'translate(-50%,-50%)', left: '50%', top: '50%' }} />
@@ -99,8 +109,22 @@ export default function Board({ board, size = 15, yourSymbol, isMyTurn, onCellCl
                   />
                 )}
 
-                {/* Piece */}
-                {value && (
+                {/* Piece — TicTacToe uses X/O text, Caro uses stones */}
+                {value && isTTT && (
+                  <span
+                    className={`relative z-20 font-black animate-piece select-none ${isWin ? 'animate-pulse' : ''}`}
+                    style={{
+                      fontSize: cellPx * 0.55,
+                      color: value === 'X' ? '#60a5fa' : '#f87171',
+                      textShadow: value === 'X'
+                        ? '0 0 12px rgba(96,165,250,0.7)'
+                        : '0 0 12px rgba(248,113,113,0.7)',
+                    }}
+                  >
+                    {value}
+                  </span>
+                )}
+                {value && !isTTT && (
                   <div
                     className={`
                       relative z-20 rounded-full flex items-center justify-center

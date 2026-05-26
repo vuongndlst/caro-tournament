@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Board from './Board';
+import ChessBoard from './ChessBoard';
 import { socket } from '../socket';
 import { Eye, X, User } from 'lucide-react';
 
@@ -109,15 +110,26 @@ export default function SpectatorView({ matchId, roomCode, onClose }) {
         {/* Board */}
         {board && (
           <div className="p-3">
-            <Board
-              board={board}
-              size={matchData?.size || 15}
-              yourSymbol="X"
-              isMyTurn={false}
-              onCellClick={() => {}}
-              disabled={true}
-              winningCells={winningCells}
-            />
+            {matchData?.gameType === 'chess' ? (
+              <ChessBoard
+                fen={board}
+                yourSymbol="X" // 'X' maps to white orientation in ChessBoard
+                isMyTurn={false}
+                onMove={() => {}}
+                disabled={true}
+              />
+            ) : (
+              <Board
+                board={board}
+                size={matchData?.size || 15}
+                gameType={matchData?.gameType || 'caro'}
+                yourSymbol="X"
+                isMyTurn={false}
+                onCellClick={() => {}}
+                disabled={true}
+                winningCells={winningCells}
+              />
+            )}
           </div>
         )}
 

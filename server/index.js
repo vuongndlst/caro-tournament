@@ -4,6 +4,7 @@ const path    = require('path');
 const crypto  = require('crypto');
 const { Server } = require('socket.io');
 const cors   = require('cors');
+const { Chess } = require('chess.js');
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 
@@ -30,7 +31,8 @@ const io = new Server(server, {
   },
 });
 
-const TURN_TIMEOUT_MS   = 30_000;
+const TURN_TIMEOUT_MS   = 30_000;  // caro / tictactoe
+const CHESS_TIMEOUT_MS  = 90_000;  // chess — 90 seconds per move
 const RECONNECT_WAIT_MS = 20_000; // window before forfeit on disconnect
 const MOVE_RATE_MS      = 400;    // minimum ms between moves (anti-spam)
 const ELO_START         = 1200;
@@ -94,9 +96,10 @@ function createEmptyBoard(size = 15) {
   return Array(size).fill(null).map(() => Array(size).fill(null));
 }
 
-function checkWinner(board, row, col, size) {
+function checkWinner(board, row, col, size, gameType = 'caro') {
   const player = board[row][col];
   if (!player) return null;
+  const winLen = gameType === 'tictactoe' ? 3 : 5;
   const directions = [[0,1],[1,0],[1,1],[1,-1]];
   for (const [dr,dc] of directions) {
     let count = 1, blocked = 0;
@@ -107,7 +110,13 @@ function checkWinner(board, row, col, size) {
     r=row-dr; c=col-dc;
     while (r>=0&&r<size&&c>=0&&c<size&&board[r][c]===player) { cells.push([r,c]); count++; r-=dr; c-=dc; }
     if (r>=0&&r<size&&c>=0&&c<size&&board[r][c]&&board[r][c]!==player) blocked++;
-    if (count>=5&&!(count===5&&blocked===2)) return { symbol: player, cells };
+    // Caro: 5 in a row, but NOT if exactly 5 and both ends blocked
+    // TicTacToe: 3 in a row, no blocked rule
+    if (gameType === 'tictactoe') {
+      if (count >= winLen) return { symbol: player, cells };
+    } else {
+      if (count>=5&&!(count===5&&blocked===2)) return { symbol: player, cells };
+    }
   }
   return null;
 }
@@ -132,7 +141,7 @@ function getTournamentPublicState(tournament) {
     .filter(p => p.status !== 'offline' && p.status !== 'reconnecting')
     .map(p => ({ id: p.id, nickname: p.nickname, status: p.status === 'result' ? 'waiting' : p.status }));
   return {
-    roomCode: tournament.roomCode, name: tournament.name,
+    roomCode: tournament.roomCode, name: tournament.name, gameType: tournament.gameType,
     status: tournament.status, players: onlinePlayers, matches, leaderboard,
   };
 }
@@ -148,11 +157,12 @@ function clearMatchTimer(matchId) {
 function startMatchTimer(match, roomCode) {
   clearMatchTimer(match.id);
   const startedAt = Date.now();
+  const durationMs = match.turnDurationMs || TURN_TIMEOUT_MS;
   matchTimers[match.id] = {
     startedAt,
-    timerId: setTimeout(() => handleTurnTimeout(match.id, roomCode), TURN_TIMEOUT_MS),
+    timerId: setTimeout(() => handleTurnTimeout(match.id, roomCode), durationMs),
   };
-  const payload = { matchId: match.id, currentTurn: match.currentTurn, turnStartedAt: startedAt, turnDurationMs: TURN_TIMEOUT_MS };
+  const payload = { matchId: match.id, currentTurn: match.currentTurn, turnStartedAt: startedAt, turnDurationMs: durationMs };
   io.to(match.p1).emit('turn_start', payload);
   io.to(match.p2).emit('turn_start', payload);
   io.to(`spectate_${match.id}`).emit('turn_start', payload);
@@ -164,6 +174,50 @@ function handleTurnTimeout(matchId, roomCode) {
   if (!match || match.status !== 'active') return;
 
   const timedOutPlayerId = match.currentTurn;
+  if (tournament.gameType === 'chess') {
+    // For chess, timeout means a loss
+    match.status = 'finished';
+    match.winner = match.currentTurn === match.p1 ? match.p2 : match.p1;
+    const p1Stats = tournament.players.get(match.p1);
+    const p2Stats = tournament.players.get(match.p2);
+    
+    // Quick Elo calculation for timeout
+    const p1Elo = p1Stats.elo; const p2Elo = p2Stats.elo;
+    const ea = 1 / (1 + Math.pow(10, (p2Elo - p1Elo) / 400));
+    const eb = 1 / (1 + Math.pow(10, (p1Elo - p2Elo) / 400));
+    let s1 = match.winner === match.p1 ? 1 : 0;
+    let s2 = match.winner === match.p2 ? 1 : 0;
+    const K = 32;
+    const dElo1 = Math.round(K * (s1 - ea));
+    const dElo2 = Math.round(K * (s2 - eb));
+    
+    if (match.winner === match.p1) {
+      p1Stats.wins++; p1Stats.streak++; p1Stats.score += 3;
+      p2Stats.losses++; p2Stats.streak = 0;
+    } else {
+      p2Stats.wins++; p2Stats.streak++; p2Stats.score += 3;
+      p1Stats.losses++; p1Stats.streak = 0;
+    }
+    p1Stats.elo = Math.max(800, p1Stats.elo + dElo1);
+    p2Stats.elo = Math.max(800, p2Stats.elo + dElo2);
+    p1Stats.status = 'result'; p1Stats.waitingSince = null;
+    p2Stats.status = 'result'; p2Stats.waitingSince = null;
+    
+    const base = {
+      matchId,
+      board: match.board,
+      currentTurn: match.currentTurn,
+      timedOut: true, timedOutPlayerId,
+      isDraw: false, winnerId: match.winner,
+    };
+    io.to(match.p1).emit('game_over', { ...base, eloChange: dElo1 });
+    io.to(match.p2).emit('game_over', { ...base, eloChange: dElo2 });
+    io.to(`spectate_${match.id}`).emit('game_over', { ...base, isSpectating: true });
+    broadcastTournamentState(roomCode);
+    return;
+  }
+
+  // Caro & TicTacToe: Timeout switches turn
   match.currentTurn = match.p1 === timedOutPlayerId ? match.p2 : match.p1;
 
   const payload = {
@@ -206,10 +260,24 @@ function createMatch(tournament, roomCode, p1, p2) {
   p1.lastOpponent = p2.id;
   p2.lastOpponent = p1.id;
   const matchId = generateMatchId();
+  let board, size;
+  let chessInstance = null;
+  if (tournament.gameType === 'chess') {
+    chessInstance = new Chess();
+    board = chessInstance.fen();
+    size = 8;
+  } else {
+    size = tournament.gameType === 'tictactoe' ? 3 : 15;
+    board = createEmptyBoard(size);
+  }
+  
+  const turnDurationMs = tournament.gameType === 'chess' ? CHESS_TIMEOUT_MS : TURN_TIMEOUT_MS;
   const match = {
     id: matchId, p1: p1.id, p2: p2.id,
-    board: createEmptyBoard(15), currentTurn: p1.id,
-    status: 'active', winner: null, startedAt: Date.now(), size: 15,
+    board, currentTurn: p1.id,
+    status: 'active', winner: null, startedAt: Date.now(), size,
+    turnDurationMs,
+    chessFen: chessInstance ? chessInstance.fen() : null, // keep track of state for chess
     lastMoveAt: {}, // rate limiting: socketId → timestamp
   };
   tournament.matches.set(matchId, match);
@@ -217,7 +285,7 @@ function createMatch(tournament, roomCode, p1, p2) {
   p2.status = 'playing'; p2.waitingSince = null;
 
   const turnStartedAt = Date.now();
-  const base = { matchId, currentTurn: match.currentTurn, board: match.board, size: match.size, turnStartedAt, turnDurationMs: TURN_TIMEOUT_MS };
+  const base = { matchId, gameType: tournament.gameType, currentTurn: match.currentTurn, board: match.board, size: match.size, turnStartedAt, turnDurationMs: match.turnDurationMs };
   io.to(p1.id).emit('match_found', { ...base, opponentNickname: p2.nickname, opponentId: p2.id, yourSymbol: 'X', opponentSymbol: 'O' });
   io.to(p2.id).emit('match_found', { ...base, opponentNickname: p1.nickname, opponentId: p1.id, yourSymbol: 'O', opponentSymbol: 'X' });
   startMatchTimer(match, roomCode);
@@ -321,7 +389,7 @@ app.get('/leaderboard/:roomCode', (req, res) => {
 io.on('connection', (socket) => {
   console.log(`[CONNECT] ${socket.id}`);
 
-  socket.on('create_tournament', ({ name, token } = {}, callback) => {
+  socket.on('create_tournament', ({ name, gameType, token } = {}, callback) => {
     const session = verifyAdminToken(token);
     if (!session) return callback?.({ success: false, message: 'Vui lòng đăng nhập để tạo giải đấu!' });
     let roomCode;
@@ -330,6 +398,7 @@ io.on('connection', (socket) => {
       `Giải đấu ${new Date().toLocaleDateString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric'})}`;
     tournaments[roomCode] = {
       adminSocketId: socket.id, roomCode, name: tournamentName,
+      gameType: gameType || 'caro',
       players: new Map(), matches: new Map(),
       status: 'waiting', createdAt: Date.now(), adminUsername: session.username,
     };
@@ -390,9 +459,9 @@ io.on('connection', (socket) => {
         const isP1     = activeMatch.p1 === socket.id;
         const opponent = t.players.get(isP1 ? activeMatch.p2 : activeMatch.p1);
         io.to(socket.id).emit('match_found', {
-          matchId: activeMatch.id, currentTurn: activeMatch.currentTurn,
+          matchId: activeMatch.id, gameType: t.gameType, currentTurn: activeMatch.currentTurn,
           board: activeMatch.board, size: activeMatch.size,
-          turnStartedAt: Date.now(), turnDurationMs: TURN_TIMEOUT_MS,
+          turnStartedAt: Date.now(), turnDurationMs: activeMatch.turnDurationMs || TURN_TIMEOUT_MS,
           opponentNickname: opponent?.nickname || '?',
           opponentId: isP1 ? activeMatch.p2 : activeMatch.p1,
           yourSymbol: isP1 ? 'X' : 'O', opponentSymbol: isP1 ? 'O' : 'X',
@@ -465,15 +534,13 @@ io.on('connection', (socket) => {
     callback?.({ success: true, leaderboard: finalState.leaderboard });
   });
 
-  socket.on('make_move', ({ matchId, row, col }, callback) => {
-    const meta = socketMeta[socket.id];
-    if (!meta) return callback?.({ success: false });
-    const t = tournaments[meta.roomCode];
-    if (!t) return callback?.({ success: false });
+  socket.on('make_move', ({ matchId, row, col, move }, callback) => {
+    const meta = socketMeta[socket.id]; if (!meta) return;
+    const t = tournaments[meta.roomCode]; if (!t) return;
     const match = t.matches.get(matchId);
+    console.log(`[MOVE] ${meta.nickname} in ${matchId}`);
     if (!match || match.status !== 'active') return callback?.({ success: false, message: 'Trận đấu không hợp lệ' });
     if (match.currentTurn !== socket.id) return callback?.({ success: false, message: 'Chưa đến lượt bạn!' });
-    if (match.board[row][col] !== null) return callback?.({ success: false, message: 'Ô này đã được đánh!' });
 
     // ── Rate limiting ─────────────────────────────────────────────────────────
     const lastAt = match.lastMoveAt[socket.id] || 0;
@@ -481,28 +548,63 @@ io.on('connection', (socket) => {
     match.lastMoveAt[socket.id] = Date.now();
 
     clearMatchTimer(match.id);
-    const symbol = match.p1 === socket.id ? 'X' : 'O';
-    match.board[row][col] = symbol;
 
-    const winResult = checkWinner(match.board, row, col, match.size);
-    const draw      = !winResult && isBoardFull(match.board);
+    if (t.gameType === 'chess') {
+      const chess = new Chess(match.board);
+      try {
+        const result = chess.move(move);
+        if (!result) return callback?.({ success: false, message: 'Nước đi không hợp lệ!' });
+        
+        match.board = chess.fen();
+        const isCheckmate = chess.isCheckmate();
+        const isDraw = chess.isDraw();
 
-    if (winResult || draw) {
-      const movePayload = { matchId, row, col, symbol, currentTurn: match.currentTurn, board: match.board };
-      io.to(match.p1).emit('move_made', movePayload);
-      io.to(match.p2).emit('move_made', movePayload);
-      io.to(`spectate_${match.id}`).emit('move_made', movePayload);
-      resolveGameOver(match, t, meta.roomCode, {
-        winnerId: winResult ? socket.id : null, isDraw: !!draw,
-        winningCells: winResult ? winResult.cells : null,
-      });
+        if (isCheckmate || isDraw) {
+          const movePayload = { matchId, move, currentTurn: match.currentTurn, board: match.board };
+          io.to(match.p1).emit('move_made', movePayload);
+          io.to(match.p2).emit('move_made', movePayload);
+          io.to(`spectate_${match.id}`).emit('move_made', movePayload);
+          resolveGameOver(match, t, meta.roomCode, {
+            winnerId: isCheckmate ? socket.id : null, isDraw: !!isDraw,
+            winningCells: null,
+          });
+        } else {
+          match.currentTurn = match.p1 === socket.id ? match.p2 : match.p1;
+          const movePayload = { matchId, move, currentTurn: match.currentTurn, board: match.board };
+          io.to(match.p1).emit('move_made', movePayload);
+          io.to(match.p2).emit('move_made', movePayload);
+          io.to(`spectate_${match.id}`).emit('move_made', movePayload);
+          startMatchTimer(match, meta.roomCode);
+        }
+      } catch (e) {
+        return callback?.({ success: false, message: 'Nước đi không hợp lệ!' });
+      }
     } else {
-      match.currentTurn = match.p1 === socket.id ? match.p2 : match.p1;
-      const movePayload = { matchId, row, col, symbol, currentTurn: match.currentTurn, board: match.board };
-      io.to(match.p1).emit('move_made', movePayload);
-      io.to(match.p2).emit('move_made', movePayload);
-      io.to(`spectate_${match.id}`).emit('move_made', movePayload);
-      startMatchTimer(match, meta.roomCode);
+      if (match.board[row][col] !== null) return callback?.({ success: false, message: 'Ô này đã được đánh!' });
+      
+      const symbol = match.p1 === socket.id ? 'X' : 'O';
+      match.board[row][col] = symbol;
+
+      const winResult = checkWinner(match.board, row, col, match.size, t.gameType);
+      const draw      = !winResult && isBoardFull(match.board);
+
+      if (winResult || draw) {
+        const movePayload = { matchId, row, col, symbol, currentTurn: match.currentTurn, board: match.board };
+        io.to(match.p1).emit('move_made', movePayload);
+        io.to(match.p2).emit('move_made', movePayload);
+        io.to(`spectate_${match.id}`).emit('move_made', movePayload);
+        resolveGameOver(match, t, meta.roomCode, {
+          winnerId: winResult ? socket.id : null, isDraw: !!draw,
+          winningCells: winResult ? winResult.cells : null,
+        });
+      } else {
+        match.currentTurn = match.p1 === socket.id ? match.p2 : match.p1;
+        const movePayload = { matchId, row, col, symbol, currentTurn: match.currentTurn, board: match.board };
+        io.to(match.p1).emit('move_made', movePayload);
+        io.to(match.p2).emit('move_made', movePayload);
+        io.to(`spectate_${match.id}`).emit('move_made', movePayload);
+        startMatchTimer(match, meta.roomCode);
+      }
     }
     callback?.({ success: true });
   });
@@ -539,7 +641,7 @@ io.on('connection', (socket) => {
     socket.join(`spectate_${matchId}`);
     if (socketMeta[socket.id]) socketMeta[socket.id].spectating = matchId;
     callback?.({ success: true, match: {
-      matchId, board: match.board, size: match.size, currentTurn: match.currentTurn, status: match.status,
+      matchId, board: match.board, size: match.size, gameType: t.gameType, currentTurn: match.currentTurn, status: match.status,
       p1Nickname: t.players.get(match.p1)?.nickname||'?', p2Nickname: t.players.get(match.p2)?.nickname||'?',
       p1Id: match.p1, p2Id: match.p2,
     }});
