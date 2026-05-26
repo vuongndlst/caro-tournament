@@ -126,7 +126,7 @@ function getTournamentPublicState(tournament) {
     .sort((a,b) => b.elo - a.elo || b.wins - a.wins);
   const onlinePlayers = players
     .filter(p => p.status !== 'offline' && p.status !== 'reconnecting')
-    .map(p => ({ id: p.id, nickname: p.nickname, status: p.status }));
+    .map(p => ({ id: p.id, nickname: p.nickname, status: p.status === 'result' ? 'waiting' : p.status }));
   return {
     roomCode: tournament.roomCode, name: tournament.name,
     status: tournament.status, players: onlinePlayers, matches, leaderboard,
@@ -245,8 +245,8 @@ function resolveGameOver(match, tournament, roomCode, { winnerId, isDraw, oppone
     if (isDraw) {
       eloChangeP1 = calcEloChange(oldEloP1, oldEloP2, 0.5, 0);
       eloChangeP2 = calcEloChange(oldEloP2, oldEloP1, 0.5, 0);
-      p1.draws++; p1.score += 1; p1.streak = 0; p1.status = 'waiting'; p1.waitingSince = Date.now();
-      p2.draws++; p2.score += 1; p2.streak = 0; p2.status = 'waiting'; p2.waitingSince = Date.now();
+      p1.draws++; p1.score += 1; p1.streak = 0; p1.status = 'result'; p1.waitingSince = null;
+      p2.draws++; p2.score += 1; p2.streak = 0; p2.status = 'result'; p2.waitingSince = null;
     } else if (winnerId) {
       const [winner, loser, winnerOldElo, loserOldElo] =
         winnerId === match.p1 ? [p1, p2, oldEloP1, oldEloP2] : [p2, p1, oldEloP2, oldEloP1];
@@ -257,8 +257,8 @@ function resolveGameOver(match, tournament, roomCode, { winnerId, isDraw, oppone
       eloChangeP2 = winnerId === match.p2
         ? calcEloChange(winnerOldElo, loserOldElo, 1, newStreak)
         : calcEloChange(p2.elo, p1.elo, 0, 0);
-      winner.wins++; winner.score += 3; winner.streak = newStreak; winner.status = 'waiting'; winner.waitingSince = Date.now();
-      loser.losses++;            loser.streak = 0;               loser.status  = 'waiting'; loser.waitingSince  = Date.now();
+      winner.wins++; winner.score += 3; winner.streak = newStreak; winner.status = 'result'; winner.waitingSince = null;
+      loser.losses++;            loser.streak = 0;               loser.status  = 'result'; loser.waitingSince  = null;
     }
     p1.elo = Math.max(800, p1.elo + eloChangeP1);
     p2.elo = Math.max(800, p2.elo + eloChangeP2);
@@ -269,6 +269,8 @@ function resolveGameOver(match, tournament, roomCode, { winnerId, isDraw, oppone
   io.to(match.p2).emit('game_over', { ...base, eloChange: eloChangeP2 });
   io.to(`spectate_${match.id}`).emit('game_over', { ...base, isSpectating: true });
   broadcastTournamentState(roomCode);
+  // Pair any OTHER players who were already waiting before this game ended
+  setTimeout(() => matchWaitingPlayers(roomCode), 100);
 }
 
 // ─── REST API ─────────────────────────────────────────────────────────────────
@@ -396,6 +398,7 @@ io.on('connection', (socket) => {
 
     const player = {
       id: socket.id, socketId: socket.id, nickname: trimmedNickname,
+      status: 'waiting',
       score: 0, wins: 0, draws: 0, losses: 0, streak: 0,
       elo: ELO_START,
       opponentHistory: new Set(),
@@ -487,8 +490,10 @@ io.on('connection', (socket) => {
     const t = tournaments[roomCode];
     if (!t || t.status !== 'active') return;
     const player = t.players.get(socket.id);
-    if (!player || player.status !== 'waiting') return;
-    player.waitingSince = player.waitingSince || Date.now();
+    // Accept both 'waiting' (already queued) and 'result' (just finished a match)
+    if (!player || (player.status !== 'waiting' && player.status !== 'result')) return;
+    player.status = 'waiting';
+    player.waitingSince = Date.now();
     matchWaitingPlayers(roomCode);
   });
 

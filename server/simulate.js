@@ -1,25 +1,41 @@
 /**
  * CaroTourney — Tournament Simulation
- * Spawns 1 admin + 20 student sockets, plays out full tournament,
+ * Spawns 1 admin + 20 student sockets, plays out a full tournament,
  * reports leaderboard and any errors found.
+ *
+ * Usage:  node simulate.js [serverUrl]
+ * Example: node simulate.js http://localhost:3001
  */
 
 const { io: ioClient } = require('socket.io-client');
 const https = require('https');
 const http  = require('http');
 
-function httpGet(url) {
+// Override server URL from CLI arg
+const SERVER_URL_ARG = process.argv[2];
+if (SERVER_URL_ARG) {
+  // Will be referenced below — overrides the constant
+}
+
+function httpRequest(url, opts = {}) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
-    lib.get(url, res => {
+    const req = lib.request(url, { method: 'GET', ...opts,
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) }
+    }, (res) => {
       let data = '';
       res.on('data', d => { data += d; });
       res.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve(null); } });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    if (opts.body) req.write(opts.body);
+    req.end();
   });
 }
 
-const SERVER_URL = 'http://localhost:3001';
+const SERVER_URL = process.argv[2] || 'http://localhost:3001';
+const ADMIN_USER = process.env.TEACHER_USERNAME || 'giaovien';
+const ADMIN_PASS = process.env.TEACHER_PASSWORD || 'lsts@2024';
 const NUM_PLAYERS = 20;
 const MOVE_DELAY_MS = 80;   // ms between each automated move
 const ROUND_LIMIT = 6;      // max rounds to simulate per player
@@ -58,18 +74,39 @@ const stats = {
   timeouts: 0,
 };
 
-// ── Random move helper ────────────────────────────────────────────────────────
-function pickRandomMove(board, size) {
-  const empty = [];
-  for (let r = 0; r < size; r++)
-    for (let c = 0; c < size; c++)
-      if (board[r][c] === null) empty.push([r, c]);
+// ── Smart move helper — plays near existing stones so games end quickly ────────
+function pickSmartMove(board, size) {
+  const center = Math.floor(size / 2);
+  const empty  = [];
+  const nearStones = new Set();
+
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      if (board[r][c] === null) {
+        empty.push([r, c]);
+      } else {
+        // Mark cells within distance 2 of each existing stone
+        for (let dr = -2; dr <= 2; dr++) {
+          for (let dc = -2; dc <= 2; dc++) {
+            const nr = r + dr, nc = c + dc;
+            if (nr >= 0 && nr < size && nc >= 0 && nc < size && board[nr][nc] === null)
+              nearStones.add(`${nr},${nc}`);
+          }
+        }
+      }
+    }
+  }
   if (empty.length === 0) return null;
 
-  // Simple heuristic: prefer center area cells for faster wins
-  const center = Math.floor(size / 2);
-  const weighted = empty.filter(([r,c]) => Math.abs(r-center) < 6 && Math.abs(c-center) < 6);
-  const pool = weighted.length > 0 ? weighted : empty;
+  // Prefer cells adjacent to existing stones (creates lines → faster wins)
+  if (nearStones.size > 0) {
+    const adj = Array.from(nearStones).map(k => k.split(',').map(Number));
+    return adj[Math.floor(Math.random() * adj.length)];
+  }
+
+  // First move: play near center
+  const near = empty.filter(([r,c]) => Math.abs(r-center) < 3 && Math.abs(c-center) < 3);
+  const pool = near.length > 0 ? near : empty;
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
@@ -179,16 +216,26 @@ function createPlayer(nickname, roomCode, adminSocket) {
 }
 
 // ── Admin socket ──────────────────────────────────────────────────────────────
-function createAdmin() {
+async function createAdmin() {
+  // 1. Login via REST to get token
+  const loginRes = await httpRequest(`${SERVER_URL}/api/auth/login`, {
+    method: 'POST',
+    body: JSON.stringify({ username: ADMIN_USER, password: ADMIN_PASS }),
+  });
+  if (!loginRes?.success) throw new Error(`Login failed: ${loginRes?.message}`);
+  const token = loginRes.token;
+  ok(`Đăng nhập thành công: ${loginRes.username}`);
+
+  // 2. Connect admin socket with token
   return new Promise((resolve, reject) => {
-    const admin = ioClient(SERVER_URL, { transports: ['websocket'] });
+    const admin = ioClient(SERVER_URL, { transports: ['websocket'], auth: { token } });
 
     admin.on('connect_error', reject);
     admin.on('connect', () => {
-      admin.emit('create_tournament', {}, (res) => {
-        if (!res.success) return reject(new Error('Cannot create tournament'));
+      admin.emit('create_tournament', { token, name: 'Giả lập 20 người chơi' }, (res) => {
+        if (!res.success) return reject(new Error(`Cannot create tournament: ${res.message}`));
         ok(`Giải đấu tạo thành công — mã phòng: ${C.bold}${C.yellow}${res.roomCode}${C.reset}`);
-        resolve({ admin, roomCode: res.roomCode });
+        resolve({ admin, roomCode: res.roomCode, token });
       });
     });
   });
@@ -217,9 +264,9 @@ async function main() {
   console.log('\n' + C.bold + C.cyan + '🎮  CaroTourney — Tournament Simulation' + C.reset);
   console.log(C.dim + `   ${NUM_PLAYERS} học sinh · ${ROUND_LIMIT} vòng tối đa · server: ${SERVER_URL}\n` + C.reset);
 
-  let admin, roomCode;
+  let admin, roomCode, token;
   try {
-    ({ admin, roomCode } = await createAdmin());
+    ({ admin, roomCode, token } = await createAdmin());
   } catch (e) {
     err('Không thể kết nối server:', e.message);
     process.exit(1);
@@ -256,7 +303,7 @@ async function main() {
 
   // Fetch leaderboard via HTTP (most reliable — bypasses socket state)
   try {
-    const state = await httpGet(`${SERVER_URL}/leaderboard/${roomCode}`);
+    const state = await httpRequest(`${SERVER_URL}/leaderboard/${roomCode}`);
     if (state && state.leaderboard && state.leaderboard.length > 0) {
       finalLeaderboard = state.leaderboard;
     }

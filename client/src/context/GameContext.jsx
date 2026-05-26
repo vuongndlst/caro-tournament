@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, useCallback, useRef } from 'react';
 import { socket } from '../socket';
 import { sounds } from '../utils/sounds';
 
@@ -155,9 +155,20 @@ function reducer(state, action) {
 
 export function GameProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  // Always-current snapshot of state for use inside static socket handlers
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; });
 
   useEffect(() => {
-    socket.on('connect',    () => dispatch({ type: 'SET_CONNECTED', payload: true }));
+    socket.on('connect', () => {
+      dispatch({ type: 'SET_CONNECTED', payload: true });
+      // Reconnect: re-register admin socket ID in the tournament
+      const { role, roomCode } = stateRef.current;
+      if (role === 'admin' && roomCode) {
+        const token = localStorage.getItem('caro_admin_token');
+        if (token) socket.emit('admin_rejoin', { roomCode, token }, () => {});
+      }
+    });
     socket.on('disconnect', () => dispatch({ type: 'SET_CONNECTED', payload: false }));
 
     socket.on('room_state_update', (data) => dispatch({ type: 'ROOM_STATE_UPDATE', payload: data }));
