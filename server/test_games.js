@@ -530,3 +530,75 @@ async function main() {
 }
 
 main().catch(e => { fail('Unhandled:', e.message); process.exit(1); });
+
+// ─── Kiểm tra Chess Timeout (cần server với CHESS_TIMEOUT_TEST_MS=3000) ───────
+async function testChessTimeout() {
+  console.log('\n' + C.bold + C.red + '═══════════════════════════════════' + C.reset);
+  console.log(C.bold + C.red + '   TEST: CHESS TIMEOUT (3s)         ' + C.reset);
+  console.log(C.bold + C.red + '═══════════════════════════════════' + C.reset);
+
+  const bugs = [];
+  let { admin, roomCode } = await createAdminAndTournament('chess');
+
+  const p1 = await joinPlayer('TimeoutX', roomCode);
+  const p2 = await joinPlayer('TimeoutO', roomCode);
+
+  let p1MatchData = null, p2MatchData = null;
+  await new Promise(resolve => {
+    p1.socket.on('match_found', d => { p1MatchData = d; if (p2MatchData) resolve(); });
+    p2.socket.on('match_found', d => { p2MatchData = d; if (p1MatchData) resolve(); });
+    admin.emit('start_tournament', { roomCode }, () => {});
+  });
+
+  const firstPlayer  = p1MatchData.currentTurn === p1.playerId ? p1 : p2;
+  const secondPlayer = firstPlayer === p1 ? p2 : p1;
+  log(`Lượt đầu: ${firstPlayer.nickname} — để HẾT GIỜ, không đánh gì cả`);
+
+  // Chờ game_over và kiểm tra ai thắng
+  const result = await new Promise(resolve => {
+    const handler = (data) => {
+      p1.socket.off('game_over', handler);
+      p2.socket.off('game_over', handler);
+      resolve({ data, fromPlayer: firstPlayer });
+    };
+    p1.socket.on('game_over', handler);
+    p2.socket.on('game_over', handler);
+    setTimeout(() => resolve(null), 10000); // 10s max
+  });
+
+  if (!result) {
+    fail('Không nhận được game_over sau 10s — timeout handler không hoạt động?');
+    bugs.push('chess timeout never fired');
+  } else {
+    const { data } = result;
+    const timedOutId = firstPlayer.playerId;
+    const winnerId = data.winnerId;
+    log(`timedOutPlayer=${firstPlayer.nickname}(${timedOutId.slice(-6)}), winnerId=${winnerId?.slice(-6)}`);
+
+    if (winnerId === timedOutId) {
+      fail(`NGƯỜI HẾT GIỜ ĐƯỢC TÍNH LÀ THẮNG! Bug xác nhận!`);
+      bugs.push('chess timeout: timed-out player marked as winner');
+    } else if (winnerId === secondPlayer.playerId) {
+      ok(`Đúng: người KHÔNG hết giờ (${secondPlayer.nickname}) thắng ✓`);
+    } else {
+      fail(`winnerId lạ: ${winnerId}`);
+      bugs.push('chess timeout: unexpected winnerId');
+    }
+
+    if (data.timedOut !== true) {
+      fail('game_over thiếu cờ timedOut=true'); bugs.push('missing timedOut flag');
+    } else ok('game_over có timedOut=true ✓');
+  }
+
+  p1.socket.disconnect(); p2.socket.disconnect(); admin.disconnect();
+  return bugs;
+}
+
+// Chỉ chạy timeout test nếu server ở chế độ test
+if (process.env.CHESS_TIMEOUT_TEST_MS) {
+  testChessTimeout().then(bugs => {
+    if (bugs.length === 0) ok('CHESS TIMEOUT: Không có lỗi ✓');
+    else { bugs.forEach(b => fail(b)); }
+    process.exit(bugs.length > 0 ? 1 : 0);
+  });
+}

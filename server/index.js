@@ -32,7 +32,7 @@ const io = new Server(server, {
 });
 
 const TURN_TIMEOUT_MS   = 30_000;  // caro / tictactoe
-const CHESS_TIMEOUT_MS  = 90_000;  // chess — 90 seconds per move
+const CHESS_TIMEOUT_MS  = Number(process.env.CHESS_TIMEOUT_TEST_MS) || 90_000; // chess (override for testing)
 const RECONNECT_WAIT_MS = 20_000; // window before forfeit on disconnect
 const MOVE_RATE_MS      = 400;    // minimum ms between moves (anti-spam)
 const ELO_START         = 1200;
