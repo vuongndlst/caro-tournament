@@ -1,14 +1,36 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
-import { Clock, Users, Trophy, Wifi, WifiOff, Gamepad2, Eye, Flag } from 'lucide-react';
+import { Clock, Users, Trophy, Wifi, WifiOff, Gamepad2, Eye, Flag, History, ToggleLeft, ToggleRight, Search } from 'lucide-react';
 import SpectatorView from './SpectatorView';
 import Footer from './Footer';
+import { socket } from '../socket';
 
 export default function LobbyView() {
-  const { nickname, roomCode, tournamentState, connected } = useGame();
+  const { nickname, roomCode, tournamentState, connected, requestNextMatch } = useGame();
   const leaderboard = tournamentState?.leaderboard || [];
   const status      = tournamentState?.status || 'waiting';
   const players     = tournamentState?.players || [];
+
+  const [autoQueue, setAutoQueue] = useState(() => localStorage.getItem('caro_auto_queue') !== 'false');
+  const [myHistory, setMyHistory] = useState(null); // null = not loaded, [] = loaded empty
+  const [showHistory, setShowHistory] = useState(false);
+
+  const toggleAutoQueue = () => {
+    setAutoQueue(prev => {
+      const next = !prev;
+      localStorage.setItem('caro_auto_queue', String(next));
+      return next;
+    });
+  };
+
+  const loadHistory = () => {
+    setShowHistory(h => !h);
+    if (myHistory === null) {
+      socket.emit('get_my_history', { roomCode }, (res) => {
+        setMyHistory(res?.history || []);
+      });
+    }
+  };
 
   // ── Tournament ended screen ──────────────────────────────────────────────
   if (status === 'finished') {
@@ -126,10 +148,35 @@ export default function LobbyView() {
           ) : (
             <>
               <Gamepad2 className="w-4 h-4 text-green-400 shrink-0" />
-              <p className="text-green-300 font-medium text-sm">Đang chờ ghép trận...</p>
+              <p className="text-green-300 font-medium text-sm">
+                {autoQueue ? 'Đang chờ ghép trận tự động...' : 'Chế độ thủ công — nhấn Tìm trận để ghép.'}
+              </p>
             </>
           )}
         </div>
+
+        {/* Manual find-match button */}
+        {status === 'active' && !autoQueue && (
+          <button
+            onClick={() => requestNextMatch()}
+            className="w-full mt-3 btn-primary flex items-center justify-center gap-2 text-sm"
+          >
+            <Search className="w-4 h-4" /> Tìm trận ngay
+          </button>
+        )}
+
+        {/* Auto-queue toggle */}
+        {status === 'active' && (
+          <button
+            onClick={toggleAutoQueue}
+            className="w-full mt-2 flex items-center justify-between gap-2 bg-slate-700/40 hover:bg-slate-700/60 rounded-xl px-4 py-2 transition-colors text-sm"
+          >
+            <span className="text-slate-400">Tự động tìm trận</span>
+            {autoQueue
+              ? <ToggleRight className="w-5 h-5 text-indigo-400" />
+              : <ToggleLeft  className="w-5 h-5 text-slate-500" />}
+          </button>
+        )}
 
         <div className="flex items-center justify-center gap-1.5 mt-3 text-xs text-slate-500">
           {connected
@@ -137,6 +184,42 @@ export default function LobbyView() {
             : <><WifiOff className="w-3 h-3 text-red-400" /> Mất kết nối — đang thử lại...</>}
         </div>
       </div>
+
+      {/* Match history */}
+      {status === 'active' && (
+        <div className="card w-full max-w-md animate-fade-in">
+          <button onClick={loadHistory} className="flex items-center gap-2 w-full">
+            <History className="w-4 h-4 text-indigo-400 shrink-0" />
+            <h3 className="font-semibold text-sm flex-1 text-left">Lịch sử trận đấu của tôi</h3>
+            <span className="text-slate-500 text-xs">{showHistory ? '▲' : '▼'}</span>
+          </button>
+          {showHistory && (
+            <div className="mt-3">
+              {myHistory === null && <p className="text-slate-500 text-xs text-center py-2">Đang tải...</p>}
+              {myHistory?.length === 0 && <p className="text-slate-500 text-xs text-center py-2">Chưa có trận nào</p>}
+              {myHistory?.length > 0 && (
+                <ul className="space-y-1.5">
+                  {myHistory.map((m, i) => (
+                    <li key={i} className="flex items-center gap-2 text-xs bg-slate-700/30 rounded-lg px-3 py-2">
+                      <span className={`font-bold shrink-0 ${
+                        m.result === 'win' ? 'text-green-400' : m.result === 'draw' ? 'text-yellow-400' : 'text-red-400'
+                      }`}>
+                        {m.result === 'win' ? 'T' : m.result === 'draw' ? 'H' : 'B'}
+                      </span>
+                      <span className="truncate flex-1 text-slate-300">vs {m.opponentNickname}</span>
+                      {m.eloChange !== undefined && (
+                        <span className={`shrink-0 font-medium ${m.eloChange >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {m.eloChange >= 0 ? '+' : ''}{m.eloChange}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Live matches to spectate */}
       {liveMatches.length > 0 && (

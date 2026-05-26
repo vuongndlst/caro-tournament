@@ -10,7 +10,7 @@ import { startMusic, stopMusic, setMusicMuted } from '../utils/music';
 import { socket } from '../socket';
 import {
   Trophy, Handshake, Skull, ChevronRight, Swords,
-  Volume2, VolumeX, Clock, TrendingUp
+  Volume2, VolumeX, Clock, TrendingUp, LayoutList, X, WifiOff
 } from 'lucide-react';
 
 // ── Rank badge ─────────────────────────────────────────────────────────────────
@@ -56,17 +56,22 @@ function useExitCountdown(active, onExpire, seconds = 10) {
 export default function GameView() {
   const {
     currentMatch, gameResult, playerId, nickname,
-    playerStatus, makeMove, requestNextMatch, tournamentState,
-    sendReaction, incomingReaction, showCountdown, hideCountdown,
+    playerStatus, makeMove, requestNextMatch, returnToLobbyOnly,
+    tournamentState, sendReaction, incomingReaction, showCountdown,
+    hideCountdown, opponentReconnecting,
   } = useGame();
 
-  const [muted,        setMuted]        = useState(isMuted());
-  const [timedOutMsg,  setTimedOutMsg]  = useState(''); // toast when turn times out
+  const [muted,           setMuted]           = useState(isMuted());
+  const [timedOutMsg,     setTimedOutMsg]      = useState('');
+  const [showLeaderboard, setShowLeaderboard]  = useState(false);
+  const [autoQueue]                            = useState(() =>
+    localStorage.getItem('caro_auto_queue') !== 'false'
+  );
   const resultFired = useRef(false);
 
-  // 10-second countdown after match ends → auto return to lobby
+  // 10-second countdown after match ends → auto return to lobby (only if autoQueue)
   const exitCountdown = useExitCountdown(
-    playerStatus === 'result',
+    playerStatus === 'result' && autoQueue,
     () => requestNextMatch(),
   );
 
@@ -146,14 +151,47 @@ export default function GameView() {
     </button>
   );
 
+  // ── Leaderboard overlay ──────────────────────────────────────────────────
+  const LeaderboardOverlay = showLeaderboard && tournamentState?.leaderboard?.length > 0 && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={() => setShowLeaderboard(false)}>
+      <div className="card w-full max-w-sm max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-2 mb-3">
+          <Trophy className="w-4 h-4 text-yellow-400" />
+          <h3 className="font-bold text-sm flex-1">Bảng xếp hạng</h3>
+          <button onClick={() => setShowLeaderboard(false)} className="text-slate-500 hover:text-white">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <ul className="space-y-1.5 overflow-y-auto">
+          {tournamentState.leaderboard.map((p, i) => (
+            <li key={p.id} className={`flex items-center gap-2 text-xs rounded-lg px-3 py-2 ${
+              p.nickname === nickname ? 'bg-indigo-900/50 border border-indigo-700/40' : 'bg-slate-700/30'
+            }`}>
+              <span className="text-slate-500 w-5 shrink-0 text-center">
+                {i < 3 ? ['🥇','🥈','🥉'][i] : `${i+1}.`}
+              </span>
+              <span className={`truncate flex-1 font-medium ${p.nickname === nickname ? 'text-indigo-300' : 'text-slate-200'}`}>
+                {p.nickname}
+              </span>
+              {p.streak >= 3 && <span className="text-orange-400 shrink-0">🔥</span>}
+              {p.rank && <span className="text-slate-500 shrink-0">{p.rank.emoji}</span>}
+              <span className="font-bold text-indigo-300 shrink-0 tabular-nums">{p.elo ?? p.score}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+
   // ── Result screen with 10-second countdown ────────────────────────────────
   if (playerStatus === 'result' && gameResult) {
-    const { isDraw, winnerId, opponentDisconnected, winningCells, board } = gameResult;
+    const { isDraw, winnerId, opponentDisconnected, winningCells, board, eloChange } = gameResult;
     const iWon = winnerId === playerId;
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 flex flex-col items-center justify-center p-4 gap-5">
         {MuteBtn}
+        {LeaderboardOverlay}
 
         {/* Result card */}
         <div className="card w-full max-w-sm text-center animate-bounce-in">
@@ -178,11 +216,16 @@ export default function GameView() {
                       `${currentMatch?.opponentNickname} đã thắng`}
           </p>
 
-          {/* Points earned */}
-          <div className="bg-slate-700/50 rounded-xl px-4 py-2 mb-3">
-            <span className="text-sm text-slate-400">Điểm nhận được: </span>
-            <span className="font-bold text-indigo-300 text-lg">+{isDraw ? 1 : iWon ? 3 : 0} điểm</span>
-          </div>
+          {/* ELO change */}
+          {eloChange !== undefined && (
+            <div className="bg-slate-700/50 rounded-xl px-4 py-2 mb-3">
+              <span className="text-sm text-slate-400">ELO: </span>
+              <span className="font-bold text-white text-lg">{myScore?.elo ?? '—'}</span>
+              <span className={`ml-2 font-bold text-base ${eloChange >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                ({eloChange >= 0 ? '+' : ''}{eloChange})
+              </span>
+            </div>
+          )}
 
           {/* Current rank and stats */}
           {myScore && (
@@ -207,13 +250,31 @@ export default function GameView() {
           )}
 
           {/* Buttons + countdown */}
-          <button onClick={requestNextMatch} className="btn-primary w-full flex items-center justify-center gap-2 mb-2">
-            <ChevronRight className="w-5 h-5" /> Trận tiếp theo
-          </button>
-          <div className="flex items-center justify-center gap-1.5 text-xs text-slate-500">
-            <Clock className="w-3 h-3" />
-            <span>Tự động thoát sau <span className="text-slate-300 font-bold tabular-nums">{exitCountdown}s</span></span>
-          </div>
+          {autoQueue ? (
+            <>
+              <button onClick={requestNextMatch} className="btn-primary w-full flex items-center justify-center gap-2 mb-2">
+                <ChevronRight className="w-5 h-5" /> Trận tiếp theo
+              </button>
+              <div className="flex items-center justify-center gap-1.5 text-xs text-slate-500">
+                <Clock className="w-3 h-3" />
+                <span>Tự động thoát sau <span className="text-slate-300 font-bold tabular-nums">{exitCountdown}s</span></span>
+              </div>
+            </>
+          ) : (
+            <button onClick={returnToLobbyOnly} className="btn-primary w-full flex items-center justify-center gap-2 mb-2">
+              <ChevronRight className="w-5 h-5" /> Về sảnh chờ
+            </button>
+          )}
+
+          {/* Leaderboard button */}
+          {tournamentState?.leaderboard?.length > 0 && (
+            <button
+              onClick={() => setShowLeaderboard(true)}
+              className="w-full mt-2 flex items-center justify-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 bg-slate-700/40 hover:bg-slate-700/60 rounded-xl py-2 transition-colors"
+            >
+              <LayoutList className="w-3.5 h-3.5" /> Xem bảng xếp hạng
+            </button>
+          )}
         </div>
 
         {/* Final board */}
@@ -244,12 +305,32 @@ export default function GameView() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 flex flex-col items-center p-3 lg:p-5">
       {MuteBtn}
+      {LeaderboardOverlay}
+
+      {/* Leaderboard button during game */}
+      {tournamentState?.leaderboard?.length > 0 && (
+        <button
+          onClick={() => setShowLeaderboard(true)}
+          className="fixed top-4 left-4 z-30 p-2.5 rounded-xl bg-slate-800/90 border border-slate-700/60 hover:bg-slate-700 transition-colors shadow-lg"
+          title="Bảng xếp hạng"
+        >
+          <LayoutList className="w-4 h-4 text-yellow-400" />
+        </button>
+      )}
 
       {/* 3-2-1 Countdown */}
       {showCountdown && <Countdown onDone={hideCountdown} />}
 
+      {/* Opponent reconnecting banner */}
+      {opponentReconnecting && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 bg-orange-900/90 border border-orange-700/60 rounded-xl text-orange-200 text-sm font-medium shadow-xl flex items-center gap-2 animate-fade-in">
+          <WifiOff className="w-4 h-4 text-orange-400 shrink-0" />
+          {opponentNickname} mất kết nối — đang chờ kết nối lại (20s)...
+        </div>
+      )}
+
       {/* Timeout notification toast */}
-      {timedOutMsg && (
+      {timedOutMsg && !opponentReconnecting && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 bg-amber-900/90 border border-amber-700/60 rounded-xl text-amber-300 text-sm font-medium shadow-xl animate-fade-in">
           {timedOutMsg}
         </div>

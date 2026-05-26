@@ -20,6 +20,8 @@ const initialState = {
   incomingReaction: null, // { emoji, fromId, ts }
   // Show countdown overlay
   showCountdown: false,
+  // Reconnect state
+  opponentReconnecting: false,
   // UI
   error: null,
 };
@@ -113,6 +115,12 @@ function reducer(state, action) {
         incomingReaction: { ...action.payload, ts: Date.now() },
       };
 
+    case 'OPPONENT_RECONNECTING':
+      return { ...state, opponentReconnecting: true };
+
+    case 'OPPONENT_RECONNECTED':
+      return { ...state, opponentReconnecting: false };
+
     case 'TOURNAMENT_ENDED':
       return {
         ...state,
@@ -129,11 +137,12 @@ function reducer(state, action) {
     case 'RETURN_TO_LOBBY':
       return {
         ...state,
-        currentMatch:     null,
-        gameResult:       null,
-        playerStatus:     'waiting',
-        showCountdown:    false,
-        incomingReaction: null,
+        currentMatch:          null,
+        gameResult:            null,
+        playerStatus:          'waiting',
+        showCountdown:         false,
+        incomingReaction:      null,
+        opponentReconnecting:  false,
       };
 
     case 'RESET':
@@ -183,6 +192,14 @@ export function GameProvider({ children }) {
       dispatch({ type: 'TOURNAMENT_ENDED', payload: data });
     });
 
+    socket.on('opponent_reconnecting', () => {
+      dispatch({ type: 'OPPONENT_RECONNECTING' });
+    });
+
+    socket.on('opponent_reconnected', () => {
+      dispatch({ type: 'OPPONENT_RECONNECTED' });
+    });
+
     socket.connect();
 
     return () => {
@@ -196,6 +213,8 @@ export function GameProvider({ children }) {
       socket.off('game_over');
       socket.off('reaction_received');
       socket.off('tournament_ended');
+      socket.off('opponent_reconnecting');
+      socket.off('opponent_reconnected');
     };
   }, []);
 
@@ -245,6 +264,11 @@ export function GameProvider({ children }) {
     }
   }, [state.roomCode]);
 
+  // Return to lobby UI without emitting request_next_match (used for manual-queue mode)
+  const returnToLobbyOnly = useCallback(() => {
+    dispatch({ type: 'RETURN_TO_LOBBY' });
+  }, []);
+
   const hideCountdown = useCallback(() => {
     dispatch({ type: 'HIDE_COUNTDOWN' });
   }, []);
@@ -261,6 +285,7 @@ export function GameProvider({ children }) {
       makeMove,
       sendReaction,
       requestNextMatch,
+      returnToLobbyOnly,
       hideCountdown,
       clearError,
       dispatch,

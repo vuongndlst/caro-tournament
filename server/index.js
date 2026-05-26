@@ -26,44 +26,54 @@ const io = new Server(server, {
   },
 });
 
-const TURN_TIMEOUT_MS = 30_000;
+const TURN_TIMEOUT_MS   = 30_000;
+const RECONNECT_WAIT_MS = 20_000; // window before forfeit on disconnect
+const MOVE_RATE_MS      = 400;    // minimum ms between moves (anti-spam)
+const ELO_START         = 1200;
+const ELO_K_BASE        = 32;
 
 // ─── In-memory state ──────────────────────────────────────────────────────────
-const tournaments = {};
-const socketMeta  = {};
-const matchTimers = {}; // matchId → { timerId, startedAt }
-
-// Admin auth sessions (token → { username, expiresAt })
-const adminSessions = new Map();
-
-// Finished tournament history (last 20)
+const tournaments      = {};
+const socketMeta       = {};
+const matchTimers      = {};
+const adminSessions    = new Map();
 const tournamentHistory = [];
 const MAX_HISTORY = 20;
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 function createAdminToken(username) {
   const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 h
-  adminSessions.set(token, { username, expiresAt });
+  adminSessions.set(token, { username, expiresAt: Date.now() + 86_400_000 });
   return token;
 }
-
 function verifyAdminToken(token) {
   if (!token) return null;
-  const session = adminSessions.get(token);
-  if (!session) return null;
-  if (Date.now() > session.expiresAt) { adminSessions.delete(token); return null; }
-  return session;
+  const s = adminSessions.get(token);
+  if (!s) return null;
+  if (Date.now() > s.expiresAt) { adminSessions.delete(token); return null; }
+  return s;
 }
 
-// ─── Rank helpers ─────────────────────────────────────────────────────────────
-function getRankInfo(score) {
-  if (score >= 150) return { name: 'Cao Thủ',   index: 5, emoji: '🔮', color: 'purple' };
-  if (score >= 100) return { name: 'Kim Cương',  index: 4, emoji: '💎', color: 'cyan'   };
-  if (score >= 50)  return { name: 'Vàng',       index: 3, emoji: '🏆', color: 'yellow' };
-  if (score >= 25)  return { name: 'Bạc',        index: 2, emoji: '🥈', color: 'slate'  };
-  if (score >= 10)  return { name: 'Đồng',       index: 1, emoji: '🥉', color: 'orange' };
-  return                   { name: 'Gỗ',         index: 0, emoji: '🪵', color: 'amber'  };
+// ─── Rank helpers (ELO-based) ─────────────────────────────────────────────────
+function getRankInfo(elo) {
+  if (elo >= 1500) return { name: 'Cao Thủ',    index: 5, emoji: '🔮', color: 'purple' };
+  if (elo >= 1400) return { name: 'Kim Cương',   index: 4, emoji: '💎', color: 'cyan'   };
+  if (elo >= 1300) return { name: 'Vàng',        index: 3, emoji: '🏆', color: 'yellow' };
+  if (elo >= 1200) return { name: 'Bạc',         index: 2, emoji: '🥈', color: 'slate'  };
+  if (elo >= 1100) return { name: 'Đồng',        index: 1, emoji: '🥉', color: 'orange' };
+  return                  { name: 'Gỗ',          index: 0, emoji: '🪵', color: 'amber'  };
+}
+
+// ─── ELO calculation ──────────────────────────────────────────────────────────
+/**
+ * Returns the ELO delta for 'my' side.
+ * result: 1 = win, 0.5 = draw, 0 = loss
+ * streak: winning streak, boosts K factor to reward consistency
+ */
+function calcEloChange(myElo, oppElo, result, streak = 0) {
+  const expected = 1 / (1 + Math.pow(10, (oppElo - myElo) / 400));
+  const k = streak >= 5 ? ELO_K_BASE * 1.5 : streak >= 3 ? ELO_K_BASE * 1.25 : ELO_K_BASE;
+  return Math.round(k * (result - expected));
 }
 
 // ─── Other helpers ────────────────────────────────────────────────────────────
@@ -73,86 +83,55 @@ function generateRoomCode() {
   for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
   return code;
 }
-
 function generateMatchId() {
   return `match_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
-
 function createEmptyBoard(size = 15) {
   return Array(size).fill(null).map(() => Array(size).fill(null));
 }
 
-// Returns { symbol, cells } or null. Enforces Vietnamese blocked-5 rule.
 function checkWinner(board, row, col, size) {
   const player = board[row][col];
   if (!player) return null;
-
-  const directions = [[0, 1], [1, 0], [1, 1], [1, -1]];
-  for (const [dr, dc] of directions) {
+  const directions = [[0,1],[1,0],[1,1],[1,-1]];
+  for (const [dr,dc] of directions) {
     let count = 1, blocked = 0;
-    const cells = [[row, col]];
-
-    let r = row + dr, c = col + dc;
-    while (r >= 0 && r < size && c >= 0 && c < size && board[r][c] === player) {
-      cells.push([r, c]); count++; r += dr; c += dc;
-    }
-    if (r >= 0 && r < size && c >= 0 && c < size && board[r][c] && board[r][c] !== player) blocked++;
-
-    r = row - dr; c = col - dc;
-    while (r >= 0 && r < size && c >= 0 && c < size && board[r][c] === player) {
-      cells.push([r, c]); count++; r -= dr; c -= dc;
-    }
-    if (r >= 0 && r < size && c >= 0 && c < size && board[r][c] && board[r][c] !== player) blocked++;
-
-    if (count >= 5 && !(count === 5 && blocked === 2)) return { symbol: player, cells };
+    const cells = [[row,col]];
+    let r = row+dr, c = col+dc;
+    while (r>=0&&r<size&&c>=0&&c<size&&board[r][c]===player) { cells.push([r,c]); count++; r+=dr; c+=dc; }
+    if (r>=0&&r<size&&c>=0&&c<size&&board[r][c]&&board[r][c]!==player) blocked++;
+    r=row-dr; c=col-dc;
+    while (r>=0&&r<size&&c>=0&&c<size&&board[r][c]===player) { cells.push([r,c]); count++; r-=dr; c-=dc; }
+    if (r>=0&&r<size&&c>=0&&c<size&&board[r][c]&&board[r][c]!==player) blocked++;
+    if (count>=5&&!(count===5&&blocked===2)) return { symbol: player, cells };
   }
   return null;
 }
-
-function isBoardFull(board) {
-  return board.every(row => row.every(cell => cell !== null));
-}
+function isBoardFull(board) { return board.every(r=>r.every(c=>c!==null)); }
 
 function getTournamentPublicState(tournament) {
-  const players = Array.from(tournament.players.values());
-  const matches = Array.from(tournament.matches.values()).map(m => ({
+  const players    = Array.from(tournament.players.values());
+  const matches    = Array.from(tournament.matches.values()).map(m => ({
     id: m.id,
     p1Nickname: tournament.players.get(m.p1)?.nickname,
     p2Nickname: tournament.players.get(m.p2)?.nickname,
-    p1Id: m.p1,
-    p2Id: m.p2,
-    status: m.status,
-    winner: m.winner,
+    p1Id: m.p1, p2Id: m.p2, status: m.status, winner: m.winner,
   }));
-
   const leaderboard = players
     .map(p => ({
-      id: p.id,
-      nickname: p.nickname,
-      score: p.score,
-      wins: p.wins,
-      draws: p.draws,
-      losses: p.losses,
-      status: p.status,
-      streak: p.streak || 0,
-      rank: getRankInfo(p.score),
+      id: p.id, nickname: p.nickname, elo: p.elo, score: p.score,
+      wins: p.wins, draws: p.draws, losses: p.losses,
+      status: p.status, streak: p.streak || 0, rank: getRankInfo(p.elo),
     }))
-    .sort((a, b) => b.score - a.score || b.wins - a.wins);
-
+    .sort((a,b) => b.elo - a.elo || b.wins - a.wins);
   const onlinePlayers = players
-    .filter(p => p.status !== 'offline')
+    .filter(p => p.status !== 'offline' && p.status !== 'reconnecting')
     .map(p => ({ id: p.id, nickname: p.nickname, status: p.status }));
-
   return {
-    roomCode:   tournament.roomCode,
-    name:       tournament.name,
-    status:     tournament.status,
-    players:    onlinePlayers,
-    matches,
-    leaderboard,
+    roomCode: tournament.roomCode, name: tournament.name,
+    status: tournament.status, players: onlinePlayers, matches, leaderboard,
   };
 }
-
 function broadcastTournamentState(roomCode) {
   const t = tournaments[roomCode];
   if (t) io.to(roomCode).emit('room_state_update', getTournamentPublicState(t));
@@ -160,12 +139,8 @@ function broadcastTournamentState(roomCode) {
 
 // ─── Turn Timer ───────────────────────────────────────────────────────────────
 function clearMatchTimer(matchId) {
-  if (matchTimers[matchId]) {
-    clearTimeout(matchTimers[matchId].timerId);
-    delete matchTimers[matchId];
-  }
+  if (matchTimers[matchId]) { clearTimeout(matchTimers[matchId].timerId); delete matchTimers[matchId]; }
 }
-
 function startMatchTimer(match, roomCode) {
   clearMatchTimer(match.id);
   const startedAt = Date.now();
@@ -173,18 +148,11 @@ function startMatchTimer(match, roomCode) {
     startedAt,
     timerId: setTimeout(() => handleTurnTimeout(match.id, roomCode), TURN_TIMEOUT_MS),
   };
-
-  const payload = {
-    matchId: match.id,
-    currentTurn: match.currentTurn,
-    turnStartedAt: startedAt,
-    turnDurationMs: TURN_TIMEOUT_MS,
-  };
+  const payload = { matchId: match.id, currentTurn: match.currentTurn, turnStartedAt: startedAt, turnDurationMs: TURN_TIMEOUT_MS };
   io.to(match.p1).emit('turn_start', payload);
   io.to(match.p2).emit('turn_start', payload);
   io.to(`spectate_${match.id}`).emit('turn_start', payload);
 }
-
 function handleTurnTimeout(matchId, roomCode) {
   const tournament = tournaments[roomCode];
   if (!tournament) return;
@@ -195,79 +163,47 @@ function handleTurnTimeout(matchId, roomCode) {
   match.currentTurn = match.p1 === timedOutPlayerId ? match.p2 : match.p1;
 
   const payload = {
-    matchId,
-    row: null, col: null, symbol: null,
-    currentTurn: match.currentTurn,
-    board: match.board,
-    timedOut: true,
-    timedOutPlayerId,
+    matchId, row: null, col: null, symbol: null,
+    currentTurn: match.currentTurn, board: match.board,
+    timedOut: true, timedOutPlayerId,
   };
   io.to(match.p1).emit('move_made', payload);
   io.to(match.p2).emit('move_made', payload);
   io.to(`spectate_${match.id}`).emit('move_made', payload);
-
   startMatchTimer(match, roomCode);
 }
 
 // ─── Matchmaking ──────────────────────────────────────────────────────────────
-
-/**
- * Lower score = better pairing.
- * Rank penalty:    decreases to 0 after 30 s of waiting.
- * History penalty: decreases to 0 after 20 s of waiting.
- */
 function pairingScore(p1, p2, now) {
-  const rankDiff = Math.abs(getRankInfo(p1.score).index - getRankInfo(p2.score).index);
+  const rankDiff = Math.abs(getRankInfo(p1.elo).index - getRankInfo(p2.elo).index);
   const p1Wait = (now - (p1.waitingSince || now)) / 1000;
   const p2Wait = (now - (p2.waitingSince || now)) / 1000;
   const minWait = Math.min(p1Wait, p2Wait);
-
-  // Rank penalty fades out over 30 s
-  const rankPenalty = rankDiff * Math.max(0, 1 - minWait / 30) * 100;
-
-  // Opponent-history penalty fades out over 20 s
-  const hasPlayed = p1.opponentHistory.has(p2.id) || p2.opponentHistory.has(p1.id);
+  // Rank penalty fades to 0 after 30s; history penalty fades to 0 after 20s
+  const rankPenalty    = rankDiff * Math.max(0, 1 - minWait / 30) * 100;
+  const hasPlayed      = p1.opponentHistory.has(p2.id) || p2.opponentHistory.has(p1.id);
   const historyPenalty = hasPlayed ? Math.max(0, 1 - minWait / 20) * 50 : 0;
-
   return rankPenalty + historyPenalty;
 }
 
 function createMatch(tournament, roomCode, p1, p2) {
-  // Record opponent history
   p1.opponentHistory.add(p2.id);
   p2.opponentHistory.add(p1.id);
-
   const matchId = generateMatchId();
   const match = {
-    id: matchId,
-    p1: p1.id,
-    p2: p2.id,
-    board: createEmptyBoard(15),
-    currentTurn: p1.id,
-    status: 'active',
-    winner: null,
-    startedAt: Date.now(),
-    size: 15,
+    id: matchId, p1: p1.id, p2: p2.id,
+    board: createEmptyBoard(15), currentTurn: p1.id,
+    status: 'active', winner: null, startedAt: Date.now(), size: 15,
+    lastMoveAt: {}, // rate limiting: socketId → timestamp
   };
-
   tournament.matches.set(matchId, match);
   p1.status = 'playing'; p1.waitingSince = null;
   p2.status = 'playing'; p2.waitingSince = null;
 
   const turnStartedAt = Date.now();
-  const base = {
-    matchId, currentTurn: match.currentTurn, board: match.board, size: match.size,
-    turnStartedAt, turnDurationMs: TURN_TIMEOUT_MS,
-  };
-  io.to(p1.id).emit('match_found', {
-    ...base, opponentNickname: p2.nickname, opponentId: p2.id,
-    yourSymbol: 'X', opponentSymbol: 'O',
-  });
-  io.to(p2.id).emit('match_found', {
-    ...base, opponentNickname: p1.nickname, opponentId: p1.id,
-    yourSymbol: 'O', opponentSymbol: 'X',
-  });
-
+  const base = { matchId, currentTurn: match.currentTurn, board: match.board, size: match.size, turnStartedAt, turnDurationMs: TURN_TIMEOUT_MS };
+  io.to(p1.id).emit('match_found', { ...base, opponentNickname: p2.nickname, opponentId: p2.id, yourSymbol: 'X', opponentSymbol: 'O' });
+  io.to(p2.id).emit('match_found', { ...base, opponentNickname: p1.nickname, opponentId: p1.id, yourSymbol: 'O', opponentSymbol: 'X' });
   startMatchTimer(match, roomCode);
 }
 
@@ -275,65 +211,63 @@ function matchWaitingPlayers(roomCode) {
   const tournament = tournaments[roomCode];
   if (!tournament) return;
   const now = Date.now();
-
-  const waiting = Array.from(tournament.players.values()).filter(
-    p => p.status === 'waiting' && p.socketId !== null
-  );
+  const waiting = Array.from(tournament.players.values()).filter(p => p.status === 'waiting' && p.socketId !== null);
   if (waiting.length < 2) return;
 
-  // Enumerate all candidate pairs and score them
   const candidates = [];
-  for (let i = 0; i < waiting.length; i++) {
-    for (let j = i + 1; j < waiting.length; j++) {
-      candidates.push({
-        p1: waiting[i],
-        p2: waiting[j],
-        score: pairingScore(waiting[i], waiting[j], now),
-      });
-    }
-  }
-  candidates.sort((a, b) => a.score - b.score);
+  for (let i = 0; i < waiting.length; i++)
+    for (let j = i+1; j < waiting.length; j++)
+      candidates.push({ p1: waiting[i], p2: waiting[j], score: pairingScore(waiting[i], waiting[j], now) });
+  candidates.sort((a,b) => a.score - b.score);
 
-  // Greedy matching: pick best pair first, mark both as used
   const used = new Set();
   for (const { p1, p2 } of candidates) {
     if (!used.has(p1.id) && !used.has(p2.id)) {
-      used.add(p1.id);
-      used.add(p2.id);
+      used.add(p1.id); used.add(p2.id);
       createMatch(tournament, roomCode, p1, p2);
     }
   }
-
   broadcastTournamentState(roomCode);
 }
 
 // ─── Game over helper ─────────────────────────────────────────────────────────
 function resolveGameOver(match, tournament, roomCode, { winnerId, isDraw, opponentDisconnected = false, winningCells = null }) {
   clearMatchTimer(match.id);
-  match.status  = 'finished';
-  match.winner  = winnerId || null;
+  match.status = 'finished';
+  match.winner = winnerId || null;
 
-  if (isDraw) {
-    [match.p1, match.p2].forEach(id => {
-      const p = tournament.players.get(id);
-      if (p) { p.draws++; p.score += 1; p.status = 'waiting'; p.streak = 0; p.waitingSince = Date.now(); }
-    });
-  } else if (winnerId) {
-    const loserId = match.p1 === winnerId ? match.p2 : match.p1;
-    const winner  = tournament.players.get(winnerId);
-    const loser   = tournament.players.get(loserId);
-    if (winner) { winner.wins++; winner.score += 3; winner.status = 'waiting'; winner.streak = (winner.streak || 0) + 1; winner.waitingSince = Date.now(); }
-    if (loser)  { loser.losses++; loser.status = 'waiting'; loser.streak = 0; loser.waitingSince = Date.now(); }
+  const p1 = tournament.players.get(match.p1);
+  const p2 = tournament.players.get(match.p2);
+  let eloChangeP1 = 0, eloChangeP2 = 0;
+
+  if (p1 && p2) {
+    const oldEloP1 = p1.elo, oldEloP2 = p2.elo;
+    if (isDraw) {
+      eloChangeP1 = calcEloChange(oldEloP1, oldEloP2, 0.5, 0);
+      eloChangeP2 = calcEloChange(oldEloP2, oldEloP1, 0.5, 0);
+      p1.draws++; p1.score += 1; p1.streak = 0; p1.status = 'waiting'; p1.waitingSince = Date.now();
+      p2.draws++; p2.score += 1; p2.streak = 0; p2.status = 'waiting'; p2.waitingSince = Date.now();
+    } else if (winnerId) {
+      const [winner, loser, winnerOldElo, loserOldElo] =
+        winnerId === match.p1 ? [p1, p2, oldEloP1, oldEloP2] : [p2, p1, oldEloP2, oldEloP1];
+      const newStreak = (winner.streak || 0) + 1;
+      eloChangeP1 = winnerId === match.p1
+        ? calcEloChange(winnerOldElo, loserOldElo, 1, newStreak)
+        : calcEloChange(p1.elo, p2.elo, 0, 0);
+      eloChangeP2 = winnerId === match.p2
+        ? calcEloChange(winnerOldElo, loserOldElo, 1, newStreak)
+        : calcEloChange(p2.elo, p1.elo, 0, 0);
+      winner.wins++; winner.score += 3; winner.streak = newStreak; winner.status = 'waiting'; winner.waitingSince = Date.now();
+      loser.losses++;            loser.streak = 0;               loser.status  = 'waiting'; loser.waitingSince  = Date.now();
+    }
+    p1.elo = Math.max(800, p1.elo + eloChangeP1);
+    p2.elo = Math.max(800, p2.elo + eloChangeP2);
   }
 
-  const payload = {
-    matchId: match.id, winnerId,
-    winnerSymbol: winnerId ? (match.p1 === winnerId ? 'X' : 'O') : null,
-    isDraw, opponentDisconnected, board: match.board, winningCells,
-  };
-  io.to(match.p1).emit('game_over', payload);
-  io.to(match.p2).emit('game_over', payload);
-  io.to(`spectate_${match.id}`).emit('game_over', { ...payload, isSpectating: true });
+  const base = { matchId: match.id, winnerId, winnerSymbol: winnerId ? (match.p1===winnerId?'X':'O') : null, isDraw, opponentDisconnected, board: match.board, winningCells };
+  io.to(match.p1).emit('game_over', { ...base, eloChange: eloChangeP1 });
+  io.to(match.p2).emit('game_over', { ...base, eloChange: eloChangeP2 });
+  io.to(`spectate_${match.id}`).emit('game_over', { ...base, isSpectating: true });
   broadcastTournamentState(roomCode);
 }
 
@@ -347,23 +281,17 @@ app.post('/api/auth/login', (req, res) => {
   }
   res.status(401).json({ success: false, message: 'Sai tên đăng nhập hoặc mật khẩu!' });
 });
-
 app.get('/api/auth/me', (req, res) => {
-  const token   = req.headers.authorization?.replace('Bearer ', '');
-  const session = verifyAdminToken(token);
-  if (session) return res.json({ success: true, username: session.username });
-  res.status(401).json({ success: false });
+  const token = req.headers.authorization?.replace('Bearer ','');
+  const s = verifyAdminToken(token);
+  s ? res.json({ success: true, username: s.username }) : res.status(401).json({ success: false });
 });
-
 app.get('/health', (req, res) => res.json({ status: 'ok', tournaments: Object.keys(tournaments).length }));
-
 app.get('/api/history', (req, res) => {
-  const token   = req.headers.authorization?.replace('Bearer ', '');
-  const session = verifyAdminToken(token);
-  if (!session) return res.status(401).json({ success: false });
+  const token = req.headers.authorization?.replace('Bearer ','');
+  if (!verifyAdminToken(token)) return res.status(401).json({ success: false });
   res.json({ success: true, history: tournamentHistory });
 });
-
 app.get('/leaderboard/:roomCode', (req, res) => {
   const t = tournaments[req.params.roomCode.toUpperCase()];
   if (!t) return res.status(404).json({ error: 'Room not found' });
@@ -377,22 +305,14 @@ io.on('connection', (socket) => {
   socket.on('create_tournament', ({ name, token } = {}, callback) => {
     const session = verifyAdminToken(token);
     if (!session) return callback?.({ success: false, message: 'Vui lòng đăng nhập để tạo giải đấu!' });
-
     let roomCode;
     do { roomCode = generateRoomCode(); } while (tournaments[roomCode]);
-
     const tournamentName = name?.trim() ||
-      `Giải đấu ${new Date().toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })}`;
-
+      `Giải đấu ${new Date().toLocaleDateString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric'})}`;
     tournaments[roomCode] = {
-      adminSocketId: socket.id,
-      roomCode,
-      name: tournamentName,
-      players: new Map(),
-      matches: new Map(),
-      status: 'waiting',
-      createdAt: Date.now(),
-      adminUsername: session.username,
+      adminSocketId: socket.id, roomCode, name: tournamentName,
+      players: new Map(), matches: new Map(),
+      status: 'waiting', createdAt: Date.now(), adminUsername: session.username,
     };
     socketMeta[socket.id] = { roomCode, role: 'admin', nickname: 'Admin' };
     socket.join(roomCode);
@@ -402,8 +322,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin_rejoin', ({ roomCode, token }, callback) => {
-    const session = verifyAdminToken(token);
-    if (!session) return callback?.({ success: false, message: 'Phiên đăng nhập hết hạn, vui lòng đăng nhập lại!' });
+    if (!verifyAdminToken(token)) return callback?.({ success: false, message: 'Phiên đăng nhập hết hạn!' });
     const t = tournaments[roomCode];
     if (!t) return callback?.({ success: false, message: 'Phòng không tồn tại' });
     t.adminSocketId = socket.id;
@@ -417,27 +336,78 @@ io.on('connection', (socket) => {
     const t    = tournaments[code];
     if (!t) return callback({ success: false, message: 'Mã phòng không tồn tại!' });
     if (t.status === 'finished') return callback({ success: false, message: 'Giải đấu đã kết thúc!' });
-    if (!nickname?.trim()) return callback({ success: false, message: 'Vui lòng nhập biệt danh!' });
+    const trimmedNickname = nickname?.trim();
+    if (!trimmedNickname) return callback({ success: false, message: 'Vui lòng nhập biệt danh!' });
 
+    // ── Reconnection: same nickname, player is disconnected/reconnecting ──────
+    const reconnecting = Array.from(t.players.values()).find(
+      p => p.nickname.toLowerCase() === trimmedNickname.toLowerCase() &&
+           (p.status === 'offline' || p.status === 'reconnecting')
+    );
+    if (reconnecting) {
+      if (reconnecting.disconnectTimerId) { clearTimeout(reconnecting.disconnectTimerId); reconnecting.disconnectTimerId = null; }
+      const oldId = reconnecting.id;
+      reconnecting.id       = socket.id;
+      reconnecting.socketId = socket.id;
+      // Re-key the players Map
+      t.players.delete(oldId);
+      t.players.set(socket.id, reconnecting);
+      // Update match references
+      let activeMatch = null;
+      for (const [, m] of t.matches) {
+        if (m.status === 'active') {
+          if (m.p1 === oldId) { m.p1 = socket.id; activeMatch = m; }
+          else if (m.p2 === oldId) { m.p2 = socket.id; activeMatch = m; }
+        }
+      }
+      reconnecting.status = activeMatch ? 'playing' : 'waiting';
+      reconnecting.waitingSince = activeMatch ? null : Date.now();
+      socketMeta[socket.id] = { roomCode: code, role: 'player', nickname: reconnecting.nickname };
+      socket.join(code);
+      callback({ success: true, playerId: socket.id, roomCode: code });
+
+      if (activeMatch) {
+        // Restore the ongoing match for the reconnected player
+        const isP1     = activeMatch.p1 === socket.id;
+        const opponent = t.players.get(isP1 ? activeMatch.p2 : activeMatch.p1);
+        io.to(socket.id).emit('match_found', {
+          matchId: activeMatch.id, currentTurn: activeMatch.currentTurn,
+          board: activeMatch.board, size: activeMatch.size,
+          turnStartedAt: Date.now(), turnDurationMs: TURN_TIMEOUT_MS,
+          opponentNickname: opponent?.nickname || '?',
+          opponentId: isP1 ? activeMatch.p2 : activeMatch.p1,
+          yourSymbol: isP1 ? 'X' : 'O', opponentSymbol: isP1 ? 'O' : 'X',
+          reconnecting: true,
+        });
+        // Notify opponent
+        const opponentSocket = isP1 ? activeMatch.p2 : activeMatch.p1;
+        io.to(opponentSocket).emit('opponent_reconnected', { nickname: reconnecting.nickname });
+      }
+      broadcastTournamentState(code);
+      if (t.status === 'active' && !activeMatch) matchWaitingPlayers(code);
+      return; // skip normal join logic
+    }
+
+    // ── Normal join ───────────────────────────────────────────────────────────
     const dup = Array.from(t.players.values()).find(
-      p => p.nickname.toLowerCase() === nickname.trim().toLowerCase()
+      p => p.nickname.toLowerCase() === trimmedNickname.toLowerCase()
     );
     if (dup) return callback({ success: false, message: 'Biệt danh đã được dùng, hãy chọn tên khác!' });
 
     const player = {
-      id: socket.id, socketId: socket.id, nickname: nickname.trim(),
-      score: 0, wins: 0, draws: 0, losses: 0, status: 'waiting', streak: 0,
-      opponentHistory: new Set(), // all opponents ever faced
+      id: socket.id, socketId: socket.id, nickname: trimmedNickname,
+      score: 0, wins: 0, draws: 0, losses: 0, streak: 0,
+      elo: ELO_START,
+      opponentHistory: new Set(),
       waitingSince: t.status === 'active' ? Date.now() : null,
+      disconnectTimerId: null,
     };
     t.players.set(socket.id, player);
-    socketMeta[socket.id] = { roomCode: code, role: 'player', nickname: nickname.trim() };
+    socketMeta[socket.id] = { roomCode: code, role: 'player', nickname: trimmedNickname };
     socket.join(code);
-
-    console.log(`[JOIN] ${nickname} → ${code}`);
+    console.log(`[JOIN] ${trimmedNickname} → ${code}`);
     callback({ success: true, playerId: socket.id, roomCode: code });
     broadcastTournamentState(code);
-
     if (t.status === 'active') matchWaitingPlayers(code);
   });
 
@@ -446,13 +416,9 @@ io.on('connection', (socket) => {
     if (!t) return callback?.({ success: false });
     if (t.adminSocketId !== socket.id) return callback?.({ success: false, message: 'Không có quyền!' });
     if (t.players.size < 2) return callback?.({ success: false, message: 'Cần ít nhất 2 người chơi!' });
-
     t.status = 'active';
-    // Mark all waiting players with a waitingSince timestamp
     const now = Date.now();
-    for (const p of t.players.values()) {
-      if (p.status === 'waiting') p.waitingSince = now;
-    }
+    for (const p of t.players.values()) if (p.status==='waiting') p.waitingSince = now;
     io.to(roomCode).emit('tournament_started');
     matchWaitingPlayers(roomCode);
     callback?.({ success: true });
@@ -462,29 +428,16 @@ io.on('connection', (socket) => {
     const t = tournaments[roomCode];
     if (!t) return callback?.({ success: false, message: 'Phòng không tồn tại' });
     if (t.adminSocketId !== socket.id) return callback?.({ success: false, message: 'Không có quyền!' });
-
-    for (const [, match] of t.matches) {
-      if (match.status === 'active') {
-        resolveGameOver(match, t, roomCode, { winnerId: null, isDraw: true });
-      }
-    }
-
-    t.status = 'finished';
-    t.finishedAt = Date.now();
+    for (const [, match] of t.matches)
+      if (match.status === 'active') resolveGameOver(match, t, roomCode, { winnerId: null, isDraw: true });
+    t.status = 'finished'; t.finishedAt = Date.now();
     const finalState = getTournamentPublicState(t);
-
-    // Save to history
     tournamentHistory.unshift({
-      roomCode: t.roomCode,
-      name: t.name,
-      createdAt: t.createdAt,
-      finishedAt: t.finishedAt,
-      playerCount: t.players.size,
-      matchCount: t.matches.size,
-      leaderboard: finalState.leaderboard.slice(0, 10), // top 10
+      roomCode: t.roomCode, name: t.name, createdAt: t.createdAt, finishedAt: t.finishedAt,
+      playerCount: t.players.size, matchCount: t.matches.size,
+      leaderboard: finalState.leaderboard.slice(0, 10),
     });
     if (tournamentHistory.length > MAX_HISTORY) tournamentHistory.pop();
-
     io.to(roomCode).emit('tournament_ended', { leaderboard: finalState.leaderboard });
     broadcastTournamentState(roomCode);
     console.log(`[TOURNAMENT] Ended: ${roomCode} — "${t.name}"`);
@@ -501,6 +454,11 @@ io.on('connection', (socket) => {
     if (match.currentTurn !== socket.id) return callback?.({ success: false, message: 'Chưa đến lượt bạn!' });
     if (match.board[row][col] !== null) return callback?.({ success: false, message: 'Ô này đã được đánh!' });
 
+    // ── Rate limiting ─────────────────────────────────────────────────────────
+    const lastAt = match.lastMoveAt[socket.id] || 0;
+    if (Date.now() - lastAt < MOVE_RATE_MS) return callback?.({ success: false, message: 'Đánh quá nhanh!' });
+    match.lastMoveAt[socket.id] = Date.now();
+
     clearMatchTimer(match.id);
     const symbol = match.p1 === socket.id ? 'X' : 'O';
     match.board[row][col] = symbol;
@@ -515,15 +473,13 @@ io.on('connection', (socket) => {
 
     if (winResult || draw) {
       resolveGameOver(match, t, meta.roomCode, {
-        winnerId: winResult ? socket.id : null,
-        isDraw: !!draw,
+        winnerId: winResult ? socket.id : null, isDraw: !!draw,
         winningCells: winResult ? winResult.cells : null,
       });
     } else {
       match.currentTurn = match.p1 === socket.id ? match.p2 : match.p1;
       startMatchTimer(match, meta.roomCode);
     }
-
     callback?.({ success: true });
   });
 
@@ -538,81 +494,71 @@ io.on('connection', (socket) => {
 
   // ─── Emoji reactions ─────────────────────────────────────────────────────
   socket.on('send_reaction', ({ matchId, emoji }) => {
-    const meta = socketMeta[socket.id];
-    if (!meta) return;
-    const t = tournaments[meta.roomCode];
-    if (!t) return;
+    const meta = socketMeta[socket.id]; if (!meta) return;
+    const t    = tournaments[meta.roomCode]; if (!t) return;
     const match = t.matches.get(matchId);
     if (!match || match.status !== 'active') return;
-
     const opponent = match.p1 === socket.id ? match.p2 : match.p1;
     const payload  = { emoji, fromId: socket.id, matchId };
     io.to(opponent).emit('reaction_received', payload);
     io.to(`spectate_${matchId}`).emit('reaction_received', payload);
   });
 
-  // ─── Spectator mode ───────────────────────────────────────────────────────
+  // ─── Spectator ────────────────────────────────────────────────────────────
   socket.on('spectate_match', ({ matchId, roomCode }, callback) => {
-    const code = roomCode?.toUpperCase();
-    const t    = tournaments[code];
+    const t = tournaments[roomCode?.toUpperCase()];
     if (!t) return callback?.({ success: false, message: 'Phòng không tồn tại' });
     const match = t.matches.get(matchId);
     if (!match) return callback?.({ success: false, message: 'Trận không tồn tại' });
-
     socket.join(`spectate_${matchId}`);
     if (socketMeta[socket.id]) socketMeta[socket.id].spectating = matchId;
-
-    const p1 = t.players.get(match.p1);
-    const p2 = t.players.get(match.p2);
-    callback?.({
-      success: true,
-      match: {
-        matchId, board: match.board, size: match.size,
-        currentTurn: match.currentTurn, status: match.status,
-        p1Nickname: p1?.nickname || '?', p2Nickname: p2?.nickname || '?',
-        p1Id: match.p1, p2Id: match.p2,
-      },
-    });
+    callback?.({ success: true, match: {
+      matchId, board: match.board, size: match.size, currentTurn: match.currentTurn, status: match.status,
+      p1Nickname: t.players.get(match.p1)?.nickname||'?', p2Nickname: t.players.get(match.p2)?.nickname||'?',
+      p1Id: match.p1, p2Id: match.p2,
+    }});
   });
-
   socket.on('stop_spectating', ({ matchId }) => {
     socket.leave(`spectate_${matchId}`);
     if (socketMeta[socket.id]) delete socketMeta[socket.id].spectating;
   });
 
-  // ─── Player stats (admin) ─────────────────────────────────────────────────
+  // ─── Player stats ─────────────────────────────────────────────────────────
   socket.on('get_player_stats', ({ roomCode, playerId }, callback) => {
-    const t = tournaments[roomCode];
-    if (!t) return callback?.({ success: false });
-    const p = t.players.get(playerId);
-    if (!p) return callback?.({ success: false });
-
+    const t = tournaments[roomCode]; if (!t) return callback?.({ success: false });
+    const p = t.players.get(playerId); if (!p) return callback?.({ success: false });
     const matchHistory = Array.from(t.matches.values())
-      .filter(m => (m.p1 === playerId || m.p2 === playerId) && m.status === 'finished')
+      .filter(m => (m.p1===playerId||m.p2===playerId) && m.status==='finished')
       .map(m => {
-        const isP1 = m.p1 === playerId;
-        const opponentId = isP1 ? m.p2 : m.p1;
-        const opponent   = t.players.get(opponentId);
-        const result = m.winner === playerId ? 'win' : m.winner === null ? 'draw' : 'loss';
-        return { matchId: m.id, opponentNickname: opponent?.nickname || '?', result, startedAt: m.startedAt };
-      })
-      .sort((a, b) => b.startedAt - a.startedAt);
+        const isP1 = m.p1===playerId;
+        const opp  = t.players.get(isP1?m.p2:m.p1);
+        return {
+          matchId: m.id, opponentNickname: opp?.nickname||'?', startedAt: m.startedAt,
+          result: m.winner===playerId?'win':m.winner===null?'draw':'loss',
+        };
+      }).sort((a,b)=>b.startedAt-a.startedAt);
+    callback?.({ success: true, stats: {
+      id: p.id, nickname: p.nickname, elo: p.elo, score: p.score,
+      wins: p.wins, draws: p.draws, losses: p.losses, streak: p.streak,
+      rank: getRankInfo(p.elo), matchHistory, opponentCount: p.opponentHistory.size,
+    }});
+  });
 
-    callback?.({
-      success: true,
-      stats: {
-        id: p.id,
-        nickname: p.nickname,
-        score: p.score,
-        wins: p.wins,
-        draws: p.draws,
-        losses: p.losses,
-        streak: p.streak,
-        rank: getRankInfo(p.score),
-        matchHistory,
-        opponentCount: p.opponentHistory.size,
-      },
-    });
+  // ─── My match history (for students) ─────────────────────────────────────
+  socket.on('get_my_history', ({ roomCode }, callback) => {
+    const t = tournaments[roomCode]; if (!t) return callback?.({ success: false });
+    const p = t.players.get(socket.id); if (!p) return callback?.({ success: false });
+    const history = Array.from(t.matches.values())
+      .filter(m => (m.p1===socket.id||m.p2===socket.id) && m.status==='finished')
+      .map(m => {
+        const isP1 = m.p1===socket.id;
+        const opp  = t.players.get(isP1?m.p2:m.p1);
+        return {
+          opponentNickname: opp?.nickname||'?', startedAt: m.startedAt,
+          result: m.winner===socket.id?'win':m.winner===null?'draw':'loss',
+        };
+      }).sort((a,b)=>b.startedAt-a.startedAt);
+    callback?.({ success: true, history });
   });
 
   // ─── Disconnect ───────────────────────────────────────────────────────────
@@ -624,22 +570,46 @@ io.on('connection', (socket) => {
 
     if (meta.role === 'player') {
       const player = t.players.get(socket.id);
-      for (const [, match] of t.matches) {
-        if (match.status === 'active' && (match.p1 === socket.id || match.p2 === socket.id)) {
-          const opponent = match.p1 === socket.id ? match.p2 : match.p1;
-          resolveGameOver(match, t, meta.roomCode, {
-            winnerId: opponent, isDraw: false, opponentDisconnected: true,
-          });
-          setTimeout(() => matchWaitingPlayers(meta.roomCode), 500);
-          break;
+      if (player) {
+        // Check if player is in an active match
+        let inActiveMatch = false;
+        for (const [, match] of t.matches) {
+          if (match.status === 'active' && (match.p1 === socket.id || match.p2 === socket.id)) {
+            inActiveMatch = true;
+            // Notify opponent that player is reconnecting
+            const opponentId = match.p1 === socket.id ? match.p2 : match.p1;
+            io.to(opponentId).emit('opponent_reconnecting', {
+              nickname: player.nickname, waitMs: RECONNECT_WAIT_MS,
+            });
+            break;
+          }
         }
+
+        // Mark as reconnecting and start forfeit timer
+        player.status    = 'reconnecting';
+        player.socketId  = null;
+
+        if (player.disconnectTimerId) clearTimeout(player.disconnectTimerId);
+        player.disconnectTimerId = setTimeout(() => {
+          if (player.status !== 'reconnecting') return; // already reconnected
+          player.status = 'offline';
+          // Forfeit active match
+          for (const [, match] of t.matches) {
+            if (match.status === 'active' && (match.p1 === player.id || match.p2 === player.id)) {
+              const opponent = match.p1 === player.id ? match.p2 : match.p1;
+              resolveGameOver(match, t, meta.roomCode, { winnerId: opponent, isDraw: false, opponentDisconnected: true });
+              setTimeout(() => matchWaitingPlayers(meta.roomCode), 500);
+              break;
+            }
+          }
+          broadcastTournamentState(meta.roomCode);
+        }, RECONNECT_WAIT_MS);
       }
-      if (player) { player.status = 'offline'; player.socketId = null; }
     }
 
     delete socketMeta[socket.id];
     broadcastTournamentState(meta.roomCode);
-    console.log(`[DISCONNECT] ${socket.id} (${meta.nickname})`);
+    console.log(`[DISCONNECT] ${socket.id} (${meta.nickname}) — reconnect window open`);
   });
 });
 
