@@ -11,17 +11,9 @@ export default function LobbyView() {
   const status      = tournamentState?.status || 'waiting';
   const players     = tournamentState?.players || [];
 
-  const [autoQueue, setAutoQueue] = useState(() => localStorage.getItem('caro_auto_queue') !== 'false');
+  const autoQueue = true;
   const [myHistory, setMyHistory] = useState(null); // null = not loaded, [] = loaded empty
   const [showHistory, setShowHistory] = useState(false);
-
-  const toggleAutoQueue = () => {
-    setAutoQueue(prev => {
-      const next = !prev;
-      localStorage.setItem('caro_auto_queue', String(next));
-      return next;
-    });
-  };
 
   const loadHistory = () => {
     setShowHistory(h => !h);
@@ -149,34 +141,13 @@ export default function LobbyView() {
             <>
               <Gamepad2 className="w-4 h-4 text-green-400 shrink-0" />
               <p className="text-green-300 font-medium text-sm">
-                {autoQueue ? 'Đang chờ ghép trận tự động...' : 'Chế độ thủ công — nhấn Tìm trận để ghép.'}
+                Đang chờ ghép trận tự động...
               </p>
             </>
           )}
         </div>
 
-        {/* Manual find-match button */}
-        {status === 'active' && !autoQueue && (
-          <button
-            onClick={() => requestNextMatch()}
-            className="w-full mt-3 btn-primary flex items-center justify-center gap-2 text-sm"
-          >
-            <Search className="w-4 h-4" /> Tìm trận ngay
-          </button>
-        )}
-
-        {/* Auto-queue toggle */}
-        {status === 'active' && (
-          <button
-            onClick={toggleAutoQueue}
-            className="w-full mt-2 flex items-center justify-between gap-2 bg-slate-700/40 hover:bg-slate-700/60 rounded-xl px-4 py-2 transition-colors text-sm"
-          >
-            <span className="text-slate-400">Tự động tìm trận</span>
-            {autoQueue
-              ? <ToggleRight className="w-5 h-5 text-indigo-400" />
-              : <ToggleLeft  className="w-5 h-5 text-slate-500" />}
-          </button>
-        )}
+        {/* Manual find-match button and auto-queue toggle removed */}
 
         <div className="flex items-center justify-center gap-1.5 mt-3 text-xs text-slate-500">
           {connected
@@ -284,6 +255,7 @@ export default function LobbyView() {
                     {p.nickname}
                   </span>
                   {p.streak >= 3 && <span className="text-orange-400 text-[10px] shrink-0">🔥</span>}
+                  <span className="font-bold text-slate-400 shrink-0 mx-1">{p.elo} ELO</span>
                   <span className="font-bold text-indigo-300 shrink-0">{p.score}đ</span>
                 </li>
               ))}

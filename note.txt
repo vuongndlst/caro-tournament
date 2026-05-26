@@ -1,0 +1,2 @@
+
+Tạo thêm game mới: cờ vua, tic tac toe, cờ vây, rắn săn mồi 2 người chơi xem ai săn được nhiều hơn trong thời gian 2 phút hoặc khi 1 con rắn bị cắn vào chính mình. Khi tạo tournament giáo viên được chọn tạo loại game nào. Do đây là nâng cấp lớn nên làm từng phần và test từng phần 1

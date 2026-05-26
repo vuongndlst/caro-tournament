@@ -64,14 +64,12 @@ export default function GameView() {
   const [muted,           setMuted]           = useState(isMuted());
   const [timedOutMsg,     setTimedOutMsg]      = useState('');
   const [showLeaderboard, setShowLeaderboard]  = useState(false);
-  const [autoQueue]                            = useState(() =>
-    localStorage.getItem('caro_auto_queue') !== 'false'
-  );
+  const autoQueue = true;
   const resultFired = useRef(false);
 
-  // 10-second countdown after match ends → auto return to lobby (only if autoQueue)
+  // 10-second countdown after match ends → auto return to lobby
   const exitCountdown = useExitCountdown(
-    playerStatus === 'result' && autoQueue,
+    playerStatus === 'result',
     () => requestNextMatch(),
   );
 
@@ -250,21 +248,13 @@ export default function GameView() {
           )}
 
           {/* Buttons + countdown */}
-          {autoQueue ? (
-            <>
-              <button onClick={requestNextMatch} className="btn-primary w-full flex items-center justify-center gap-2 mb-2">
-                <ChevronRight className="w-5 h-5" /> Trận tiếp theo
-              </button>
-              <div className="flex items-center justify-center gap-1.5 text-xs text-slate-500">
-                <Clock className="w-3 h-3" />
-                <span>Tự động thoát sau <span className="text-slate-300 font-bold tabular-nums">{exitCountdown}s</span></span>
-              </div>
-            </>
-          ) : (
-            <button onClick={returnToLobbyOnly} className="btn-primary w-full flex items-center justify-center gap-2 mb-2">
-              <ChevronRight className="w-5 h-5" /> Về sảnh chờ
-            </button>
-          )}
+          <button onClick={requestNextMatch} className="btn-primary w-full flex items-center justify-center gap-2 mb-2">
+            <ChevronRight className="w-5 h-5" /> Trận tiếp theo
+          </button>
+          <div className="flex items-center justify-center gap-1.5 text-xs text-slate-500">
+            <Clock className="w-3 h-3" />
+            <span>Tự động ghép tiếp sau <span className="text-slate-300 font-bold tabular-nums">{exitCountdown}s</span></span>
+          </div>
 
           {/* Leaderboard button */}
           {tournamentState?.leaderboard?.length > 0 && (

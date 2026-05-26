@@ -8,8 +8,12 @@ const cors   = require('cors');
 const IS_PROD = process.env.NODE_ENV === 'production';
 
 // ─── Teacher credentials (override via env vars) ──────────────────────────────
-const TEACHER_USERNAME = process.env.TEACHER_USERNAME || 'giaovien';
-const TEACHER_PASSWORD = process.env.TEACHER_PASSWORD || 'lsts@2024';
+const TEACHER_CREDENTIALS = {
+  [process.env.TEACHER_USERNAME || 'giaovien']: process.env.TEACHER_PASSWORD || 'lsts@2024',
+  'phungnd': 'lsts@123',
+  'canhhn': 'lsts@123',
+  'vuongnd': 'lsts@123'
+};
 const TOKEN_SECRET     = process.env.TOKEN_SECRET     || 'lstsCaroTourney2024#Secret';
 
 const app = express();
@@ -179,16 +183,28 @@ function pairingScore(p1, p2, now) {
   const p1Wait = (now - (p1.waitingSince || now)) / 1000;
   const p2Wait = (now - (p2.waitingSince || now)) / 1000;
   const minWait = Math.min(p1Wait, p2Wait);
-  // Rank penalty fades to 0 after 30s; history penalty fades to 0 after 20s
-  const rankPenalty    = rankDiff * Math.max(0, 1 - minWait / 30) * 100;
-  const hasPlayed      = p1.opponentHistory.has(p2.id) || p2.opponentHistory.has(p1.id);
-  const historyPenalty = hasPlayed ? Math.max(0, 1 - minWait / 20) * 50 : 0;
+  // Rank penalty fades to 0 after 30s
+  const rankPenalty = rankDiff * Math.max(0, 1 - minWait / 30) * 100;
+  
+  const hasPlayed = p1.opponentHistory.has(p2.id) || p2.opponentHistory.has(p1.id);
+  const isLastOpponent = p1.lastOpponent === p2.id || p2.lastOpponent === p1.id;
+  
+  let historyPenalty = 0;
+  if (isLastOpponent) {
+    if (minWait < 20) return Infinity; // Hard block consecutive matches within 20s
+    historyPenalty = Math.max(0, 1 - minWait / 60) * 10000;
+  } else if (hasPlayed) {
+    historyPenalty = Math.max(0, 1 - minWait / 20) * 100;
+  }
+  
   return rankPenalty + historyPenalty;
 }
 
 function createMatch(tournament, roomCode, p1, p2) {
   p1.opponentHistory.add(p2.id);
   p2.opponentHistory.add(p1.id);
+  p1.lastOpponent = p2.id;
+  p2.lastOpponent = p1.id;
   const matchId = generateMatchId();
   const match = {
     id: matchId, p1: p1.id, p2: p2.id,
@@ -221,7 +237,8 @@ function matchWaitingPlayers(roomCode) {
   candidates.sort((a,b) => a.score - b.score);
 
   const used = new Set();
-  for (const { p1, p2 } of candidates) {
+  for (const { p1, p2, score } of candidates) {
+    if (score === Infinity) continue;
     if (!used.has(p1.id) && !used.has(p2.id)) {
       used.add(p1.id); used.add(p2.id);
       createMatch(tournament, roomCode, p1, p2);
@@ -276,7 +293,7 @@ function resolveGameOver(match, tournament, roomCode, { winnerId, isDraw, oppone
 // ─── REST API ─────────────────────────────────────────────────────────────────
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body || {};
-  if (username === TEACHER_USERNAME && password === TEACHER_PASSWORD) {
+  if (TEACHER_CREDENTIALS[username] && TEACHER_CREDENTIALS[username] === password) {
     const token = createAdminToken(username);
     console.log(`[AUTH] Login: ${username}`);
     return res.json({ success: true, token, username });
@@ -402,6 +419,7 @@ io.on('connection', (socket) => {
       score: 0, wins: 0, draws: 0, losses: 0, streak: 0,
       elo: ELO_START,
       opponentHistory: new Set(),
+      lastOpponent: null,
       waitingSince: t.status === 'active' ? Date.now() : null,
       disconnectTimerId: null,
     };
@@ -469,18 +487,21 @@ io.on('connection', (socket) => {
     const winResult = checkWinner(match.board, row, col, match.size);
     const draw      = !winResult && isBoardFull(match.board);
 
-    const movePayload = { matchId, row, col, symbol, currentTurn: match.currentTurn, board: match.board };
-    io.to(match.p1).emit('move_made', movePayload);
-    io.to(match.p2).emit('move_made', movePayload);
-    io.to(`spectate_${match.id}`).emit('move_made', movePayload);
-
     if (winResult || draw) {
+      const movePayload = { matchId, row, col, symbol, currentTurn: match.currentTurn, board: match.board };
+      io.to(match.p1).emit('move_made', movePayload);
+      io.to(match.p2).emit('move_made', movePayload);
+      io.to(`spectate_${match.id}`).emit('move_made', movePayload);
       resolveGameOver(match, t, meta.roomCode, {
         winnerId: winResult ? socket.id : null, isDraw: !!draw,
         winningCells: winResult ? winResult.cells : null,
       });
     } else {
       match.currentTurn = match.p1 === socket.id ? match.p2 : match.p1;
+      const movePayload = { matchId, row, col, symbol, currentTurn: match.currentTurn, board: match.board };
+      io.to(match.p1).emit('move_made', movePayload);
+      io.to(match.p2).emit('move_made', movePayload);
+      io.to(`spectate_${match.id}`).emit('move_made', movePayload);
       startMatchTimer(match, meta.roomCode);
     }
     callback?.({ success: true });
@@ -628,6 +649,6 @@ if (IS_PROD) {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`LSTS Caro Tourney server running on http://localhost:${PORT}`);
-  console.log(`  Teacher login: ${TEACHER_USERNAME} / ${TEACHER_PASSWORD}`);
+  console.log(`  Multiple teacher logins are active.`);
   if (IS_PROD) console.log('  Mode: production (serving client static files)');
 });

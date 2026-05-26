@@ -37,7 +37,7 @@ const SERVER_URL = process.argv[2] || 'http://localhost:3001';
 const ADMIN_USER = process.env.TEACHER_USERNAME || 'giaovien';
 const ADMIN_PASS = process.env.TEACHER_PASSWORD || 'lsts@2024';
 const NUM_PLAYERS = 20;
-const MOVE_DELAY_MS = 80;   // ms between each automated move
+const MOVE_DELAY_MS = 400;   // ms between each automated move
 const ROUND_LIMIT = 6;      // max rounds to simulate per player
 
 // ── Student names ─────────────────────────────────────────────────────────────
@@ -188,7 +188,7 @@ function createPlayer(nickname, roomCode, adminSocket) {
 
     function makeNextMove() {
       if (!currentMatch || currentMatch.currentTurn !== socket.id) return;
-      const move = pickRandomMove(currentMatch.board, currentMatch.size || 15);
+      const move = pickSmartMove(currentMatch.board, currentMatch.size || 15);
       if (!move) return;
 
       setTimeout(() => {

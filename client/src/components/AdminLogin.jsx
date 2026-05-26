@@ -102,12 +102,7 @@ export default function AdminLogin({ onSuccess }) {
           </button>
         </form>
 
-        <div className="mt-4 pt-4 border-t border-slate-700/60">
-          <p className="text-xs text-slate-500 text-center">
-            Tài khoản mặc định: <span className="text-slate-400 font-mono">giaovien</span>{' '}
-            / <span className="text-slate-400 font-mono">lsts@2024</span>
-          </p>
-        </div>
+
       </div>
 
       <a href="/" className="mt-5 text-slate-500 hover:text-slate-300 text-sm transition-colors">
