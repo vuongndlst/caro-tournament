@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useGame } from '../context/GameContext';
 import RulesModal from './RulesModal';
+import PlayerStatsModal from './PlayerStatsModal';
 import Footer from './Footer';
 import { startMusic, stopMusic, setMusicMuted } from '../utils/music';
 import {
   Users, Swords, Trophy, Play, Copy, CheckCheck,
   Wifi, WifiOff, Crown, Circle, Shield, QrCode, X,
-  StopCircle, Flag, HelpCircle, Volume2, VolumeX
+  StopCircle, Flag, HelpCircle, Volume2, VolumeX,
+  ExternalLink, LogOut, User
 } from 'lucide-react';
 import { isMuted, toggleMute } from '../utils/sounds';
 
-export default function AdminDashboard() {
+export default function AdminDashboard({ onLogout, adminUsername }) {
   const { roomCode, tournamentState, startTournament, endTournament, connected } = useGame();
   const [copied, setCopied]     = useState(false);
   const [starting, setStarting] = useState(false);
@@ -20,6 +22,7 @@ export default function AdminDashboard() {
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [muted, setMuted] = useState(isMuted());
+  const [selectedPlayer, setSelectedPlayer] = useState(null); // { id } for stats modal
 
   // Lobby background music
   useEffect(() => {
@@ -67,6 +70,13 @@ export default function AdminDashboard() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 p-4 lg:p-6">
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
+      {selectedPlayer && (
+        <PlayerStatsModal
+          roomCode={roomCode}
+          playerId={selectedPlayer.id}
+          onClose={() => setSelectedPlayer(null)}
+        />
+      )}
 
       <div className="max-w-6xl mx-auto space-y-4 animate-fade-in">
 
@@ -80,7 +90,9 @@ export default function AdminDashboard() {
               <h1 className="text-lg font-extrabold leading-tight">
                 LSTS Caro<span className="text-indigo-400">Tourney</span>
               </h1>
-              <p className="text-xs text-slate-400">Bảng điều khiển giáo viên</p>
+              <p className="text-xs text-slate-400">
+                Xin chào, <span className="text-indigo-300 font-semibold">{adminUsername}</span>
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -104,6 +116,15 @@ export default function AdminDashboard() {
               {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
               {connected ? 'Kết nối' : 'Mất kết nối'}
             </span>
+            {onLogout && (
+              <button
+                onClick={onLogout}
+                className="p-2 rounded-lg bg-slate-700/50 hover:bg-red-900/40 border border-slate-600/40 hover:border-red-700/40 text-slate-400 hover:text-red-400 transition-colors"
+                title="Đăng xuất"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            )}
             {status === 'active' && (
               <span className="badge bg-emerald-900/60 text-emerald-300 border border-emerald-700/40 text-xs px-3 py-1">
                 <Circle className="w-2 h-2 fill-current animate-pulse" />
@@ -245,10 +266,17 @@ export default function AdminDashboard() {
             ) : (
               <ul className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
                 {players.map((p, i) => (
-                  <li key={p.id} className="flex items-center gap-2.5 rounded-xl px-3 py-2 bg-slate-700/30 hover:bg-slate-700/50 transition-colors">
+                  <li key={p.id} className="flex items-center gap-2.5 rounded-xl px-3 py-2 bg-slate-700/30 hover:bg-slate-700/50 transition-colors group">
                     <span className="text-slate-500 text-xs w-5 shrink-0 text-center">{i + 1}</span>
                     <div className={`w-2 h-2 rounded-full shrink-0 ${p.status === 'playing' ? 'bg-amber-400 animate-pulse' : 'bg-green-400'}`} />
-                    <span className="font-medium text-sm truncate flex-1">{p.nickname}</span>
+                    <button
+                      onClick={() => setSelectedPlayer({ id: p.id })}
+                      className="font-medium text-sm truncate flex-1 text-left hover:text-indigo-300 transition-colors flex items-center gap-1"
+                      title="Xem thống kê người chơi"
+                    >
+                      {p.nickname}
+                      <User className="w-3 h-3 opacity-0 group-hover:opacity-60 shrink-0" />
+                    </button>
                     <span className={`badge text-xs ${p.status === 'playing' ? 'bg-amber-900/40 text-amber-300' : 'bg-slate-600/50 text-slate-400'}`}>
                       {p.status === 'playing' ? 'Đấu' : 'Chờ'}
                     </span>
@@ -286,9 +314,18 @@ export default function AdminDashboard() {
                       <span className="text-slate-500 text-xs font-black shrink-0">VS</span>
                       <span className="text-red-300 font-semibold text-sm truncate flex-1 text-right">{m.p2Nickname}</span>
                     </div>
-                    <div className="flex items-center gap-1.5 mt-1">
-                      <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
-                      <span className="text-xs text-slate-500">Đang chơi...</span>
+                    <div className="flex items-center justify-between mt-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
+                        <span className="text-xs text-slate-500">Đang chơi...</span>
+                      </div>
+                      <button
+                        onClick={() => window.open(`/spectate?matchId=${m.id}&room=${roomCode}`, '_blank')}
+                        className="flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 transition-colors"
+                        title="Xem trực tiếp trong tab mới"
+                      >
+                        <ExternalLink className="w-3 h-3" /> Xem
+                      </button>
                     </div>
                   </li>
                 ))}
@@ -343,10 +380,11 @@ export default function AdminDashboard() {
                       {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : <span className="text-slate-500 text-xs">{i+1}</span>}
                     </div>
                     {i === 0 && <Crown className="w-3 h-3 text-yellow-400 shrink-0" />}
-                    <span className="font-medium text-sm truncate flex-1">
+                    <span className="font-medium text-sm truncate flex-1 flex items-center gap-1">
                       {p.nickname}
-                      {p.streak >= 2 && <span className="ml-1 text-orange-400 text-xs">🔥{p.streak}</span>}
+                      {p.streak >= 2 && <span className="text-orange-400 text-xs">🔥{p.streak}</span>}
                     </span>
+                    <span className="text-[10px] text-slate-500 shrink-0 hidden sm:block">{p.rank?.emoji}{p.rank?.name}</span>
                     <div className="text-right shrink-0">
                       <div className="text-sm font-bold text-indigo-300">{p.score}<span className="text-xs font-normal text-slate-500">đ</span></div>
                       <div className="text-xs text-slate-500">{p.wins}T·{p.draws}H·{p.losses}B</div>

@@ -7,21 +7,50 @@ import Countdown from './Countdown';
 import EmojiReactions from './EmojiReactions';
 import { sounds, isMuted, toggleMute } from '../utils/sounds';
 import { startMusic, stopMusic, setMusicMuted } from '../utils/music';
-import { Trophy, Handshake, Skull, ChevronRight, Swords, Volume2, VolumeX } from 'lucide-react';
+import { socket } from '../socket';
+import {
+  Trophy, Handshake, Skull, ChevronRight, Swords,
+  Volume2, VolumeX, Clock, TrendingUp
+} from 'lucide-react';
+
+// ── Rank badge ─────────────────────────────────────────────────────────────────
+const RANK_TEXT = {
+  purple: 'text-purple-400', cyan: 'text-cyan-400', yellow: 'text-yellow-400',
+  slate:  'text-slate-300',  orange: 'text-orange-400', amber: 'text-amber-500',
+};
+function RankBadge({ rank, className = '' }) {
+  if (!rank) return null;
+  return (
+    <span className={`text-[11px] font-semibold ${RANK_TEXT[rank.color] || 'text-slate-400'} ${className}`}>
+      {rank.emoji} {rank.name}
+    </span>
+  );
+}
 
 // ── Confetti helper ────────────────────────────────────────────────────────────
 function fireConfetti() {
-  const burst = (opts) => confetti({
-    particleCount: 80,
-    spread: 70,
-    startVelocity: 45,
-    gravity: 0.8,
-    ticks: 200,
-    ...opts,
-  });
+  const burst = (opts) => confetti({ particleCount: 80, spread: 70, startVelocity: 45, gravity: 0.8, ticks: 200, ...opts });
   burst({ origin: { x: 0.25, y: 0.6 }, angle: 60 });
   burst({ origin: { x: 0.75, y: 0.6 }, angle: 120 });
   setTimeout(() => burst({ origin: { x: 0.5, y: 0.5 }, angle: 90, particleCount: 60 }), 300);
+}
+
+// ── Auto-exit countdown hook ───────────────────────────────────────────────────
+function useExitCountdown(active, onExpire, seconds = 10) {
+  const [remaining, setRemaining] = useState(seconds);
+  useEffect(() => {
+    if (!active) { setRemaining(seconds); return; }
+    setRemaining(seconds);
+    const id = setInterval(() => {
+      setRemaining(prev => {
+        if (prev <= 1) { clearInterval(id); onExpire(); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+  return remaining;
 }
 
 export default function GameView() {
@@ -31,8 +60,15 @@ export default function GameView() {
     sendReaction, incomingReaction, showCountdown, hideCountdown,
   } = useGame();
 
-  const [muted, setMuted] = useState(isMuted());
+  const [muted,        setMuted]        = useState(isMuted());
+  const [timedOutMsg,  setTimedOutMsg]  = useState(''); // toast when turn times out
   const resultFired = useRef(false);
+
+  // 10-second countdown after match ends → auto return to lobby
+  const exitCountdown = useExitCountdown(
+    playerStatus === 'result',
+    () => requestNextMatch(),
+  );
 
   const handleCellClick = useCallback((row, col) => {
     if (!currentMatch || playerStatus !== 'playing') return;
@@ -41,13 +77,10 @@ export default function GameView() {
     makeMove(currentMatch.matchId, row, col);
   }, [currentMatch, playerId, playerStatus, makeMove]);
 
-  // Game background music — start when playing, stop on unmount/result
+  // Game background music
   useEffect(() => {
-    if (playerStatus === 'playing') {
-      startMusic('game');
-    } else {
-      stopMusic();
-    }
+    if (playerStatus === 'playing') startMusic('game');
+    else stopMusic();
     return () => stopMusic();
   }, [playerStatus]);
 
@@ -57,55 +90,63 @@ export default function GameView() {
     setMusicMuted(nowMuted);
   };
 
-  const myScore = tournamentState?.leaderboard?.find(p => p.nickname === nickname);
-  const isMyTurn = currentMatch?.currentTurn === playerId;
+  // Timeout notification: listen to move_made with timedOut flag
+  useEffect(() => {
+    const onMove = (data) => {
+      if (!data.timedOut || data.matchId !== currentMatch?.matchId) return;
+      const iMeTimedOut = data.timedOutPlayerId === playerId;
+      const msg = iMeTimedOut
+        ? `⏰ Bạn hết giờ! Lượt chuyển sang ${currentMatch?.opponentNickname}.`
+        : `⏰ ${currentMatch?.opponentNickname} hết giờ! Đến lượt bạn.`;
+      setTimedOutMsg(msg);
+      setTimeout(() => setTimedOutMsg(''), 3500);
+    };
+    socket.on('move_made', onMove);
+    return () => socket.off('move_made', onMove);
+  }, [currentMatch?.matchId, currentMatch?.opponentNickname, playerId]);
 
-  // ── Tick sound when timer is urgent ───────────────────────────────────────
+  const myScore       = tournamentState?.leaderboard?.find(p => p.nickname === nickname);
+  const myRankPos     = (tournamentState?.leaderboard?.findIndex(p => p.nickname === nickname) ?? -1) + 1;
+  const isMyTurn      = currentMatch?.currentTurn === playerId;
+
+  const opponentScore = tournamentState?.leaderboard?.find(p => p.id === currentMatch?.opponentId);
+  const opponentRankPos = (tournamentState?.leaderboard?.findIndex(p => p.id === currentMatch?.opponentId) ?? -1) + 1;
+
+  // Tick sound when timer is urgent
   const { turnStartedAt, turnDurationMs = 30000 } = currentMatch || {};
   useEffect(() => {
     if (!turnStartedAt || playerStatus !== 'playing') return;
-    const checkTick = () => {
-      const elapsed = Date.now() - turnStartedAt;
-      const remaining = turnDurationMs - elapsed;
-      if (remaining > 0 && remaining <= 10000 && isMyTurn) {
-        sounds.tick();
-      }
-    };
-    const id = setInterval(checkTick, 1000);
+    const id = setInterval(() => {
+      const remaining = turnDurationMs - (Date.now() - turnStartedAt);
+      if (remaining > 0 && remaining <= 10000 && isMyTurn) sounds.tick();
+    }, 1000);
     return () => clearInterval(id);
   }, [turnStartedAt, turnDurationMs, isMyTurn, playerStatus]);
 
-  // ── Result sounds + confetti ───────────────────────────────────────────────
+  // Result sounds + confetti
   useEffect(() => {
     if (playerStatus === 'result' && gameResult && !resultFired.current) {
       resultFired.current = true;
       const { isDraw, winnerId } = gameResult;
-      if (isDraw) {
-        sounds.draw();
-      } else if (winnerId === playerId) {
-        sounds.win();
-        setTimeout(fireConfetti, 300);
-      } else {
-        sounds.lose();
-      }
+      if (isDraw) { sounds.draw(); }
+      else if (winnerId === playerId) { sounds.win(); setTimeout(fireConfetti, 300); }
+      else { sounds.lose(); }
     }
     if (playerStatus !== 'result') resultFired.current = false;
   }, [playerStatus, gameResult, playerId]);
 
-  // ── Mute button (top-right corner) ────────────────────────────────────────
+  // ── Mute button ───────────────────────────────────────────────────────────
   const MuteBtn = (
     <button
       onClick={handleToggleMute}
       className="fixed top-4 right-4 z-30 p-2.5 rounded-xl bg-slate-800/90 border border-slate-700/60 hover:bg-slate-700 transition-colors shadow-lg"
       title={muted ? 'Bật âm thanh' : 'Tắt âm thanh'}
     >
-      {muted
-        ? <VolumeX className="w-4 h-4 text-slate-400" />
-        : <Volume2 className="w-4 h-4 text-indigo-400" />}
+      {muted ? <VolumeX className="w-4 h-4 text-slate-400" /> : <Volume2 className="w-4 h-4 text-indigo-400" />}
     </button>
   );
 
-  // ── Win / Lose / Draw result screen ───────────────────────────────────────
+  // ── Result screen with 10-second countdown ────────────────────────────────
   if (playerStatus === 'result' && gameResult) {
     const { isDraw, winnerId, opponentDisconnected, winningCells, board } = gameResult;
     const iWon = winnerId === playerId;
@@ -122,13 +163,11 @@ export default function GameView() {
                      'bg-red-600/30 border-2 border-red-500'
           }`}>
             {isDraw ? <Handshake className="w-10 h-10 text-yellow-400" /> :
-             iWon   ? <Trophy className="w-10 h-10 text-green-400" /> :
-                      <Skull className="w-10 h-10 text-red-400" />}
+             iWon   ? <Trophy    className="w-10 h-10 text-green-400" /> :
+                      <Skull     className="w-10 h-10 text-red-400" />}
           </div>
 
-          <h2 className={`text-3xl font-extrabold mb-1 ${
-            isDraw ? 'text-yellow-300' : iWon ? 'text-green-300' : 'text-red-400'
-          }`}>
+          <h2 className={`text-3xl font-extrabold mb-1 ${isDraw ? 'text-yellow-300' : iWon ? 'text-green-300' : 'text-red-400'}`}>
             {isDraw ? 'Hoà!' : iWon ? 'Chiến Thắng!' : 'Thua Rồi!'}
           </h2>
 
@@ -139,26 +178,42 @@ export default function GameView() {
                       `${currentMatch?.opponentNickname} đã thắng`}
           </p>
 
-          <div className="bg-slate-700/50 rounded-xl px-4 py-2 mb-2">
+          {/* Points earned */}
+          <div className="bg-slate-700/50 rounded-xl px-4 py-2 mb-3">
             <span className="text-sm text-slate-400">Điểm nhận được: </span>
-            <span className="font-bold text-indigo-300 text-lg">
-              +{isDraw ? 1 : iWon ? 3 : 0} điểm
-            </span>
+            <span className="font-bold text-indigo-300 text-lg">+{isDraw ? 1 : iWon ? 3 : 0} điểm</span>
           </div>
 
+          {/* Current rank and stats */}
           {myScore && (
-            <p className="text-slate-500 text-xs mb-5">
-              Tổng: <span className="text-white font-semibold">{myScore.score}</span> điểm
-              &nbsp;·&nbsp; {myScore.wins}T {myScore.draws}H {myScore.losses}B
-              {myScore.streak >= 2 && (
-                <span className="ml-2 text-orange-400 font-bold">🔥 ×{myScore.streak}</span>
-              )}
-            </p>
+            <div className="bg-slate-800/60 rounded-xl p-3 mb-4 text-left">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs text-slate-400 flex items-center gap-1">
+                  <TrendingUp className="w-3 h-3" /> Thứ hạng của bạn
+                </span>
+                {myRankPos > 0 && (
+                  <span className="text-indigo-300 font-bold text-sm">#{myRankPos}</span>
+                )}
+              </div>
+              <div className="flex items-center justify-between">
+                <RankBadge rank={myScore.rank} />
+                <span className="text-white font-bold text-lg">{myScore.score}<span className="text-slate-400 text-sm font-normal">đ</span></span>
+              </div>
+              <p className="text-slate-500 text-xs mt-1">
+                {myScore.wins}T · {myScore.draws}H · {myScore.losses}B
+                {myScore.streak >= 2 && <span className="ml-2 text-orange-400 font-bold">🔥 ×{myScore.streak}</span>}
+              </p>
+            </div>
           )}
 
-          <button onClick={requestNextMatch} className="btn-primary w-full flex items-center justify-center gap-2">
+          {/* Buttons + countdown */}
+          <button onClick={requestNextMatch} className="btn-primary w-full flex items-center justify-center gap-2 mb-2">
             <ChevronRight className="w-5 h-5" /> Trận tiếp theo
           </button>
+          <div className="flex items-center justify-center gap-1.5 text-xs text-slate-500">
+            <Clock className="w-3 h-3" />
+            <span>Tự động thoát sau <span className="text-slate-300 font-bold tabular-nums">{exitCountdown}s</span></span>
+          </div>
         </div>
 
         {/* Final board */}
@@ -183,8 +238,8 @@ export default function GameView() {
   if (!currentMatch) return null;
 
   const { opponentNickname, yourSymbol, board, size, winningCells } = currentMatch;
-  const opponentStreak = tournamentState?.leaderboard?.find(p => p.id === currentMatch.opponentId)?.streak || 0;
-  const myStreak       = tournamentState?.leaderboard?.find(p => p.nickname === nickname)?.streak || 0;
+  const myStreak       = myScore?.streak || 0;
+  const opponentStreak = opponentScore?.streak || 0;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 flex flex-col items-center p-3 lg:p-5">
@@ -192,6 +247,13 @@ export default function GameView() {
 
       {/* 3-2-1 Countdown */}
       {showCountdown && <Countdown onDone={hideCountdown} />}
+
+      {/* Timeout notification toast */}
+      {timedOutMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 bg-amber-900/90 border border-amber-700/60 rounded-xl text-amber-300 text-sm font-medium shadow-xl animate-fade-in">
+          {timedOutMsg}
+        </div>
+      )}
 
       {/* Match header */}
       <div className="w-full max-w-3xl mb-3 animate-slide-down">
@@ -209,7 +271,10 @@ export default function GameView() {
                   {nickname}
                   {myStreak >= 2 && <span className="ml-1 text-orange-400 text-xs">🔥{myStreak}</span>}
                 </p>
-                <p className="text-xs text-slate-400">{yourSymbol === 'X' ? '⬤ Xanh' : '⬤ Đỏ'}</p>
+                <div className="flex items-center gap-1.5">
+                  <RankBadge rank={myScore?.rank} />
+                  {myRankPos > 0 && <span className="text-slate-500 text-[10px]">#{myRankPos}</span>}
+                </div>
               </div>
               {isMyTurn && (
                 <span className="badge bg-green-900/70 text-green-300 text-xs ml-auto shrink-0 animate-pulse-fast border border-green-700/50">
@@ -235,7 +300,10 @@ export default function GameView() {
                   {opponentStreak >= 2 && <span className="mr-1 text-orange-400 text-xs">🔥{opponentStreak}</span>}
                   {opponentNickname}
                 </p>
-                <p className="text-xs text-slate-400">{yourSymbol === 'X' ? '⬤ Đỏ' : '⬤ Xanh'}</p>
+                <div className="flex items-center gap-1.5 justify-end">
+                  {opponentRankPos > 0 && <span className="text-slate-500 text-[10px]">#{opponentRankPos}</span>}
+                  <RankBadge rank={opponentScore?.rank} />
+                </div>
               </div>
               {!isMyTurn && (
                 <span className="badge bg-amber-900/60 text-amber-300 text-xs mr-auto shrink-0 animate-pulse-fast border border-amber-700/40">
@@ -272,20 +340,15 @@ export default function GameView() {
         />
       </div>
 
-      {/* Bottom bar: turn indicator + emoji reactions */}
+      {/* Bottom bar */}
       <div className="w-full max-w-3xl mt-3 flex items-center justify-between gap-3">
         <p className="text-sm text-slate-500">
           {isMyTurn
             ? <span className="text-indigo-300 font-medium animate-pulse-fast">Đến lượt bạn — hãy chọn ô để đánh!</span>
             : `Đang chờ ${opponentNickname} đánh...`}
         </p>
-
-        {/* Emoji reactions */}
         <div className="relative shrink-0">
-          <EmojiReactions
-            onReact={sendReaction}
-            incoming={incomingReaction}
-          />
+          <EmojiReactions onReact={sendReaction} incoming={incomingReaction} />
         </div>
       </div>
     </div>

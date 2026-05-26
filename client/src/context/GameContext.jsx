@@ -199,8 +199,9 @@ export function GameProvider({ children }) {
     };
   }, []);
 
-  const createTournament = useCallback((callback) => {
-    socket.emit('create_tournament', {}, (res) => {
+  const createTournament = useCallback((token, name, callback) => {
+    if (token) socket.auth = { token };
+    socket.emit('create_tournament', { token, name }, (res) => {
       if (res.success) dispatch({ type: 'ADMIN_CREATED', payload: res });
       callback?.(res);
     });
