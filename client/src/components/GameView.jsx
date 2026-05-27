@@ -105,6 +105,7 @@ export default function GameView() {
 
   const [muted,           setMuted]           = useState(isMuted());
   const [timedOutMsg,     setTimedOutMsg]      = useState('');
+  const [checkMsg,        setCheckMsg]         = useState('');
   const [showLeaderboard, setShowLeaderboard]  = useState(false);
   const autoQueue = true;
   const resultFired = useRef(false);
@@ -139,16 +140,32 @@ export default function GameView() {
     setMusicMuted(nowMuted);
   };
 
-  // Timeout notification: listen to move_made with timedOut flag
+  // Timeout & check notifications via move_made
   useEffect(() => {
     const onMove = (data) => {
-      if (!data.timedOut || data.matchId !== currentMatch?.matchId) return;
-      const iMeTimedOut = data.timedOutPlayerId === playerId;
-      const msg = iMeTimedOut
-        ? `⏰ Bạn hết giờ! Lượt chuyển sang ${currentMatch?.opponentNickname}.`
-        : `⏰ ${currentMatch?.opponentNickname} hết giờ! Đến lượt bạn.`;
-      setTimedOutMsg(msg);
-      setTimeout(() => setTimedOutMsg(''), 3500);
+      if (data.matchId !== currentMatch?.matchId) return;
+
+      // Timeout (caro/tictactoe): turn switches
+      if (data.timedOut) {
+        const iMeTimedOut = data.timedOutPlayerId === playerId;
+        const msg = iMeTimedOut
+          ? `⏰ Bạn hết giờ! Lượt chuyển sang ${currentMatch?.opponentNickname}.`
+          : `⏰ ${currentMatch?.opponentNickname} hết giờ! Đến lượt bạn.`;
+        setTimedOutMsg(msg);
+        setTimeout(() => setTimedOutMsg(''), 3500);
+        return;
+      }
+
+      // Chess check notification
+      if (data.isCheck) {
+        const isMyKingInCheck = data.currentTurn === playerId;
+        const msg = isMyKingInCheck
+          ? '♔ Vua bạn đang bị chiếu! Hãy bảo vệ vua.'
+          : `♟ Chiếu! Vua ${currentMatch?.opponentNickname} đang bị tấn công.`;
+        setCheckMsg(msg);
+        sounds.tick();
+        setTimeout(() => setCheckMsg(''), 4000);
+      }
     };
     socket.on('move_made', onMove);
     return () => socket.off('move_made', onMove);
@@ -380,6 +397,13 @@ export default function GameView() {
       {timedOutMsg && !opponentReconnecting && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 bg-amber-900/90 border border-amber-700/60 rounded-xl text-amber-300 text-sm font-medium shadow-xl animate-fade-in">
           {timedOutMsg}
+        </div>
+      )}
+
+      {/* Chess check notification toast */}
+      {checkMsg && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 bg-red-900/90 border border-red-600/60 rounded-xl text-red-200 text-sm font-bold shadow-xl animate-fade-in flex items-center gap-2">
+          <span className="text-lg">⚠️</span> {checkMsg}
         </div>
       )}
 

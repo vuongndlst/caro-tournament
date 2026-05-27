@@ -188,45 +188,12 @@ function handleTurnTimeout(matchId, roomCode) {
 
   const timedOutPlayerId = match.currentTurn;
   if (tournament.gameType === 'chess') {
-    // For chess, timeout means a loss
-    match.status = 'finished';
-    match.winner = match.currentTurn === match.p1 ? match.p2 : match.p1;
-    const p1Stats = tournament.players.get(match.p1);
-    const p2Stats = tournament.players.get(match.p2);
-    
-    // Quick Elo calculation for timeout
-    const p1Elo = p1Stats.elo; const p2Elo = p2Stats.elo;
-    const ea = 1 / (1 + Math.pow(10, (p2Elo - p1Elo) / 400));
-    const eb = 1 / (1 + Math.pow(10, (p1Elo - p2Elo) / 400));
-    let s1 = match.winner === match.p1 ? 1 : 0;
-    let s2 = match.winner === match.p2 ? 1 : 0;
-    const K = 32;
-    const dElo1 = Math.round(K * (s1 - ea));
-    const dElo2 = Math.round(K * (s2 - eb));
-    
-    if (match.winner === match.p1) {
-      p1Stats.wins++; p1Stats.streak++; p1Stats.score += 3;
-      p2Stats.losses++; p2Stats.streak = 0;
-    } else {
-      p2Stats.wins++; p2Stats.streak++; p2Stats.score += 3;
-      p1Stats.losses++; p1Stats.streak = 0;
-    }
-    p1Stats.elo = Math.max(800, p1Stats.elo + dElo1);
-    p2Stats.elo = Math.max(800, p2Stats.elo + dElo2);
-    p1Stats.status = 'result'; p1Stats.waitingSince = null;
-    p2Stats.status = 'result'; p2Stats.waitingSince = null;
-    
-    const base = {
-      matchId,
-      board: match.board,
-      currentTurn: match.currentTurn,
+    // Chess: player whose clock hit 0 loses
+    const winnerId = timedOutPlayerId === match.p1 ? match.p2 : match.p1;
+    resolveGameOver(match, tournament, roomCode, {
+      winnerId, isDraw: false,
       timedOut: true, timedOutPlayerId,
-      isDraw: false, winnerId: match.winner,
-    };
-    io.to(match.p1).emit('game_over', { ...base, eloChange: dElo1 });
-    io.to(match.p2).emit('game_over', { ...base, eloChange: dElo2 });
-    io.to(`spectate_${match.id}`).emit('game_over', { ...base, isSpectating: true });
-    broadcastTournamentState(roomCode);
+    });
     return;
   }
 
@@ -340,7 +307,7 @@ function matchWaitingPlayers(roomCode) {
 }
 
 // ─── Game over helper ─────────────────────────────────────────────────────────
-function resolveGameOver(match, tournament, roomCode, { winnerId, isDraw, opponentDisconnected = false, winningCells = null }) {
+function resolveGameOver(match, tournament, roomCode, { winnerId, isDraw, opponentDisconnected = false, winningCells = null, timedOut = false, timedOutPlayerId = null }) {
   clearMatchTimer(match.id);
   match.status = 'finished';
   match.winner = winnerId || null;
@@ -373,7 +340,12 @@ function resolveGameOver(match, tournament, roomCode, { winnerId, isDraw, oppone
     p2.elo = Math.max(800, p2.elo + eloChangeP2);
   }
 
-  const base = { matchId: match.id, winnerId, winnerSymbol: winnerId ? (match.p1===winnerId?'X':'O') : null, isDraw, opponentDisconnected, board: match.board, winningCells };
+  const base = {
+    matchId: match.id, winnerId,
+    winnerSymbol: winnerId ? (match.p1===winnerId?'X':'O') : null,
+    isDraw, opponentDisconnected, board: match.board, winningCells,
+    ...(timedOut && { timedOut: true, timedOutPlayerId }),
+  };
   io.to(match.p1).emit('game_over', { ...base, eloChange: eloChangeP1 });
   io.to(match.p2).emit('game_over', { ...base, eloChange: eloChangeP2 });
   io.to(`spectate_${match.id}`).emit('game_over', { ...base, isSpectating: true });
@@ -602,7 +574,8 @@ io.on('connection', (socket) => {
 
         match.board = chess.fen();
         const isCheckmate = chess.isCheckmate();
-        const isDraw = chess.isDraw();
+        const isDraw      = chess.isDraw();
+        const isCheck     = !isCheckmate && chess.inCheck(); // check but not checkmate
 
         if (isCheckmate || isDraw) {
           const movePayload = { matchId, move, currentTurn: match.currentTurn, board: match.board,
@@ -617,7 +590,9 @@ io.on('connection', (socket) => {
         } else {
           match.currentTurn = match.p1 === socket.id ? match.p2 : match.p1;
           const movePayload = { matchId, move, currentTurn: match.currentTurn, board: match.board,
-            p1TimeMs: match.p1TimeMs, p2TimeMs: match.p2TimeMs };
+            p1TimeMs: match.p1TimeMs, p2TimeMs: match.p2TimeMs,
+            isCheck: isCheck || false,
+          };
           io.to(match.p1).emit('move_made', movePayload);
           io.to(match.p2).emit('move_made', movePayload);
           io.to(`spectate_${match.id}`).emit('move_made', movePayload);

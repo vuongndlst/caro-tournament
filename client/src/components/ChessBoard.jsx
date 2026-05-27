@@ -1,35 +1,33 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 
 /**
- * Chess board with staged-move UX:
- *   1. Click / drag-start  → select piece (show valid-move hints)
- *   2. Click dest / drop   → preview move (board shows result, Confirm/Cancel appear)
- *   3. Confirm             → emit move to server
- *   4. Cancel              → revert to original FEN
+ * Chess board with click-to-select + click-to-move UX.
+ *   1. Click piece   → select (gold highlight + green/red move hints)
+ *   2. Click dest    → execute move immediately (no confirm step)
+ *   3. Drag-and-drop → also works as secondary input
  *
- * yourSymbol: 'X' = White (bottom), 'O' = Black (bottom)
+ * When it is the active player's turn and their king is in check,
+ * the king's square is highlighted red automatically.
+ *
+ * yourSymbol: 'X' = White (board at bottom), 'O' = Black (board at bottom)
  */
 export default function ChessBoard({ fen, yourSymbol, isMyTurn, onMove, disabled }) {
   const boardOrientation = yourSymbol === 'X' ? 'white' : 'black';
   const canInteract      = !disabled && isMyTurn;
+  const myColor          = yourSymbol === 'X' ? 'w' : 'b';
 
-  const [selectedSq,   setSelectedSq]   = useState(null);   // square currently selected
-  const [highlightSqs, setHighlightSqs] = useState({});     // move-hint highlights
-  const [pendingMove,  setPendingMove]  = useState(null);   // { from, to, move, previewFen }
-  // Ref mirrors pendingMove to avoid stale-closure bugs in drag callbacks
-  const pendingRef = useRef(null);
+  const [selectedSq,   setSelectedSq]   = useState(null);
+  const [highlightSqs, setHighlightSqs] = useState({});
 
-  // Clear everything when the server sends a new board position
+  // Clear selection whenever the board changes (after any move lands)
   useEffect(() => {
     setSelectedSq(null);
     setHighlightSqs({});
-    setPendingMove(null);
-    pendingRef.current = null;
   }, [fen]);
 
-  // ── Highlight builders ──────────────────────────────────────────────────────
+  // ── Highlight helpers ──────────────────────────────────────────────────────
   function buildMoveHighlights(square, chess) {
     const moves = chess.moves({ square, verbose: true });
     if (!moves.length) return null;
@@ -44,69 +42,54 @@ export default function ChessBoard({ fen, yourSymbol, isMyTurn, onMove, disabled
     return h;
   }
 
-  function buildPendingHighlights(from, to) {
-    return {
-      [from]: { background: 'rgba(251,191,36,0.70)', borderRadius: '4px' },
-      [to]:   { background: 'rgba(251,191,36,0.70)', borderRadius: '4px' },
-    };
-  }
-
-  // Try to validate a move locally and return { move, previewFen } or null
-  function tryPreview(from, to, currentFen) {
-    try {
-      const chess = new Chess(currentFen);
-      const piece = chess.get(from);
-      const isPromotion =
-        piece?.type === 'p' &&
-        ((piece.color === 'w' && to[1] === '8') ||
-         (piece.color === 'b' && to[1] === '1'));
-      const move = chess.move({ from, to, promotion: isPromotion ? 'q' : undefined });
-      if (!move) return null;
-      return { move, previewFen: chess.fen() };
-    } catch {
-      return null;
+  // Red king highlight when in check (computed every render, lightweight)
+  function buildCheckHighlight(chess) {
+    if (!chess.inCheck()) return {};
+    for (const row of chess.board()) {
+      for (const sq of row) {
+        if (sq?.type === 'k' && sq.color === myColor) {
+          return { [sq.square]: { background: 'rgba(220, 38, 38, 0.60)', borderRadius: '4px' } };
+        }
+      }
     }
+    return {};
   }
 
-  // ── Confirm / Cancel ────────────────────────────────────────────────────────
-  const confirmMove = useCallback(() => {
-    if (!pendingMove) return;
-    onMove(pendingMove.move);
-    // State will be reset by the fen useEffect once server confirms
-  }, [pendingMove, onMove]);
+  // ── Move execution ─────────────────────────────────────────────────────────
+  const tryMove = useCallback(
+    (from, to) => {
+      try {
+        const chess = new Chess(fen);
+        const piece = chess.get(from);
+        const isPromotion =
+          piece?.type === 'p' &&
+          ((piece.color === 'w' && to[1] === '8') ||
+           (piece.color === 'b' && to[1] === '1'));
+        const move = chess.move({ from, to, promotion: isPromotion ? 'q' : undefined });
+        if (!move) return false;
+        onMove(move);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [fen, onMove]
+  );
 
-  const cancelMove = useCallback(() => {
-    pendingRef.current = null;
-    setPendingMove(null);
-    setSelectedSq(null);
-    setHighlightSqs({});
-  }, []);
-
-  // ── Click handler ────────────────────────────────────────────────────────────
+  // ── Click handler ──────────────────────────────────────────────────────────
   const onSquareClick = useCallback(
     (square) => {
       if (!canInteract) return;
-      if (pendingMove) return;         // block until confirmed/cancelled
-
       try {
-        const chess   = new Chess(fen);
-        const myColor = yourSymbol === 'X' ? 'w' : 'b';
+        const chess = new Chess(fen);
 
         if (selectedSq) {
-          // Is this a valid destination?
+          // Check if this is a valid target
           const validMoves = chess.moves({ square: selectedSq, verbose: true });
           const isTarget   = validMoves.some(m => m.to === square);
 
           if (isTarget) {
-            const preview = tryPreview(selectedSq, square, fen);
-            if (preview) {
-              const pm = { from: selectedSq, to: square, ...preview };
-              pendingRef.current = pm;
-              setPendingMove(pm);
-              setHighlightSqs(buildPendingHighlights(selectedSq, square));
-              setSelectedSq(null);
-            }
-            return;
+            if (tryMove(selectedSq, square)) return;   // state cleared by fen useEffect
           }
 
           // Re-select another own piece
@@ -122,7 +105,7 @@ export default function ChessBoard({ fen, yourSymbol, isMyTurn, onMove, disabled
           return;
         }
 
-        // Nothing selected — try to select a piece
+        // Nothing selected — select a piece
         const piece = chess.get(square);
         if (piece && piece.color === myColor) {
           const h = buildMoveHighlights(square, chess);
@@ -133,30 +116,21 @@ export default function ChessBoard({ fen, yourSymbol, isMyTurn, onMove, disabled
         setHighlightSqs({});
       }
     },
-    [canInteract, fen, yourSymbol, selectedSq, pendingMove]
+    [canInteract, fen, myColor, selectedSq, tryMove]
   );
 
-  // ── Drag-and-drop (also creates a pending preview) ───────────────────────────
+  // ── Drag-and-drop ──────────────────────────────────────────────────────────
   const onDrop = useCallback(
     (sourceSquare, targetSquare) => {
       if (!canInteract) return false;
-      if (pendingRef.current) return false;   // use ref (not stale state)
-      const preview = tryPreview(sourceSquare, targetSquare, fen);
-      if (!preview) return false;
-      const pm = { from: sourceSquare, to: targetSquare, ...preview };
-      pendingRef.current = pm;
-      setPendingMove(pm);
-      setSelectedSq(null);
-      setHighlightSqs(buildPendingHighlights(sourceSquare, targetSquare));
-      return true;
+      return tryMove(sourceSquare, targetSquare);
     },
-    [canInteract, fen]
+    [canInteract, tryMove]
   );
 
-  // Show valid-move hints on drag start
   const onPieceDragBegin = useCallback(
     (_, square) => {
-      if (!canInteract || pendingRef.current) return;
+      if (!canInteract) return;
       try {
         const chess = new Chess(fen);
         const h = buildMoveHighlights(square, chess);
@@ -167,30 +141,31 @@ export default function ChessBoard({ fen, yourSymbol, isMyTurn, onMove, disabled
   );
 
   const onPieceDragEnd = useCallback(() => {
-    // Use ref to check pending status — avoids stale closure issue
-    // (onPieceDragEnd fires before React commits state from onDrop)
-    if (!pendingRef.current) {
-      setSelectedSq(null);
-      setHighlightSqs({});
-    }
+    setSelectedSq(null);
+    setHighlightSqs({});
   }, []);
 
-  // The board shows the preview FEN while confirming, real FEN otherwise
-  const displayFen = pendingMove ? pendingMove.previewFen : fen;
+  // ── Compute combined square styles ─────────────────────────────────────────
+  // Check highlight applied first (lowest priority), move hints on top
+  let checkHighlight = {};
+  if (canInteract) {
+    try { checkHighlight = buildCheckHighlight(new Chess(fen)); } catch {}
+  }
+  const combinedHighlights = { ...checkHighlight, ...highlightSqs };
 
   return (
     <div className="w-full max-w-[520px] mx-auto select-none touch-none">
       <div className="shadow-2xl shadow-black/50 rounded-lg overflow-hidden border-2 border-slate-700">
         <Chessboard
           id="main-board"
-          position={displayFen}
+          position={fen}
           boardOrientation={boardOrientation}
           onPieceDrop={onDrop}
           onSquareClick={onSquareClick}
           onPieceDragBegin={onPieceDragBegin}
           onPieceDragEnd={onPieceDragEnd}
-          arePiecesDraggable={canInteract && !pendingMove}
-          customSquareStyles={highlightSqs}
+          arePiecesDraggable={canInteract}
+          customSquareStyles={combinedHighlights}
           customDarkSquareStyle={{ backgroundColor: '#4a5568' }}
           customLightSquareStyle={{ backgroundColor: '#e2e8f0' }}
           animationDuration={120}
@@ -198,35 +173,12 @@ export default function ChessBoard({ fen, yourSymbol, isMyTurn, onMove, disabled
         />
       </div>
 
-      {/* ── Confirm / Cancel bar ─────────────────────────────────────────────── */}
-      {canInteract && pendingMove && (
-        <div className="flex gap-2 mt-2 px-1">
-          <button
-            onClick={confirmMove}
-            className="flex-1 bg-green-600/90 hover:bg-green-500 active:bg-green-700 text-white font-bold rounded-xl py-3 text-sm flex items-center justify-center gap-2 transition-colors border border-green-500/60 shadow-lg shadow-green-900/30"
-          >
-            <span className="text-base">✓</span> Xác nhận
-          </button>
-          <button
-            onClick={cancelMove}
-            className="flex-[0.6] bg-slate-700/90 hover:bg-slate-600 active:bg-slate-800 text-slate-200 font-bold rounded-xl py-3 text-sm flex items-center justify-center gap-2 transition-colors border border-slate-600/50"
-          >
-            <span className="text-base">✗</span> Huỷ
-          </button>
-        </div>
-      )}
-
-      {/* ── Status hint text ─────────────────────────────────────────────────── */}
-      {canInteract && !pendingMove && (
+      {/* Hint text */}
+      {canInteract && (
         <p className="text-center text-[11px] text-slate-500 mt-1.5">
           {selectedSq
-            ? '🟡 Đã chọn — nhấp ô đích để xem trước'
-            : '♟ Nhấp quân để chọn · nhấp ô để đi · hoặc kéo thả'}
-        </p>
-      )}
-      {canInteract && pendingMove && (
-        <p className="text-center text-[11px] text-amber-400/80 mt-1">
-          🔶 Xem trước nước đi — xác nhận hoặc huỷ bỏ
+            ? '🟡 Đã chọn — nhấp ô đích hoặc nhấp lại để huỷ'
+            : '♟ Nhấp quân để chọn, nhấp ô để đi · hoặc kéo thả'}
         </p>
       )}
       {!canInteract && !disabled && (
