@@ -257,8 +257,10 @@ export function GameProvider({ children }) {
     });
   }, []);
 
-  const joinRoom = useCallback((roomCode, nickname, callback) => {
-    socket.emit('join_room', { roomCode, nickname }, (res) => {
+  const joinRoom = useCallback((roomCode, nickname, supabaseToken, callback) => {
+    // supabaseToken is optional — backward-compat: if called with 3 args and 3rd is a function
+    if (typeof supabaseToken === 'function') { callback = supabaseToken; supabaseToken = null; }
+    socket.emit('join_room', { roomCode, nickname, supabaseToken }, (res) => {
       if (res.success) {
         dispatch({ type: 'PLAYER_JOINED', payload: { ...res, nickname } });
       } else {

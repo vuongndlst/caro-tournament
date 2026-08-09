@@ -1,32 +1,45 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useGame } from '../context/GameContext';
+import { useAuth } from '../context/AuthContext';
 import LobbyView from '../components/LobbyView';
 import GameView from '../components/GameView';
 import RulesModal from '../components/RulesModal';
+import AuthPage from './AuthPage';
 import Footer from '../components/Footer';
-import { Gamepad2, LogIn, AlertCircle, HelpCircle } from 'lucide-react';
+import { Gamepad2, LogIn, AlertCircle, HelpCircle, LogOut, User, Star } from 'lucide-react';
 
 export default function HomePage() {
   const { role, playerStatus, joinRoom, error, clearError, connected } = useGame();
-  const [nickname, setNickname] = useState('');
+  const { user, profile, loading: authLoading, signOut, getToken, supabaseEnabled } = useAuth();
+
   // Pre-fill room code from QR scan: ?room=XXXXXX
   const [roomCode, setRoomCode] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     return (params.get('room') || '').toUpperCase();
   });
-  const [loading, setLoading] = useState(false);
+  // Nickname: editable, but defaults to profile nickname when logged in
+  const [nickname, setNickname] = useState('');
+  const [loading, setLoading]   = useState(false);
   const [localError, setLocalError] = useState('');
-  const [showRules, setShowRules] = useState(false);
+  const [showRules, setShowRules]   = useState(false);
+  const [showAuth, setShowAuth]     = useState(false);
 
-  const handleJoin = (e) => {
+  // Pre-fill nickname when profile loads
+  useEffect(() => {
+    if (profile?.nickname && !nickname) setNickname(profile.nickname);
+  }, [profile]);
+
+  const handleJoin = async (e) => {
     e.preventDefault();
     setLocalError('');
     clearError();
-    if (!nickname.trim()) return setLocalError('Vui lòng nhập biệt danh!');
+    const nick = nickname.trim() || profile?.nickname?.trim();
+    if (!nick) return setLocalError('Vui lòng nhập biệt danh!');
     if (!roomCode.trim()) return setLocalError('Vui lòng nhập mã phòng!');
 
     setLoading(true);
-    joinRoom(roomCode.trim().toUpperCase(), nickname.trim(), (res) => {
+    const token = await getToken().catch(() => null);
+    joinRoom(roomCode.trim().toUpperCase(), nick, token, (res) => {
       setLoading(false);
       if (!res.success) setLocalError(res.message || 'Lỗi kết nối');
     });
@@ -38,6 +51,20 @@ export default function HomePage() {
   if (role === 'player') {
     if (playerStatus === 'playing' || playerStatus === 'result') return <GameView />;
     return <LobbyView />;
+  }
+
+  // Show auth page if user explicitly opened it
+  if (showAuth && supabaseEnabled) {
+    return <AuthPage onSkip={() => setShowAuth(false)} />;
+  }
+
+  // Still loading auth state
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-900">
+        <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-400 rounded-full animate-spin" />
+      </div>
+    );
   }
 
   return (
@@ -57,6 +84,42 @@ export default function HomePage() {
         <p className="text-slate-400 text-sm">Giải đấu Cờ Caro trực tuyến cho lớp học</p>
       </div>
 
+      {/* Auth status banner */}
+      {supabaseEnabled && (
+        <div className="w-full max-w-sm mb-3 animate-fade-in">
+          {user && profile ? (
+            <div className="flex items-center gap-3 bg-green-900/30 border border-green-700/40 rounded-xl px-3 py-2">
+              <div className="w-8 h-8 bg-indigo-600/40 rounded-full flex items-center justify-center shrink-0">
+                <User className="w-4 h-4 text-indigo-300" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-green-300 truncate">{profile.nickname}</p>
+                <p className="text-xs text-slate-400 flex items-center gap-1">
+                  <Star className="w-3 h-3 text-yellow-400" /> ELO: {profile.elo}
+                  <span className="text-slate-600">·</span>
+                  {profile.wins}T {profile.draws}H {profile.losses}B
+                </p>
+              </div>
+              <button
+                onClick={signOut}
+                className="shrink-0 p-1.5 rounded-lg hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors"
+                title="Đăng xuất"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowAuth(true)}
+              className="w-full flex items-center justify-center gap-2 bg-indigo-900/30 border border-indigo-700/40 hover:border-indigo-600/60 rounded-xl px-3 py-2.5 text-sm text-indigo-300 hover:text-indigo-200 transition-colors"
+            >
+              <LogIn className="w-4 h-4" />
+              Đăng nhập để lưu ELO vĩnh viễn
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Join form */}
       <div className="card w-full max-w-sm animate-fade-in">
         <h2 className="text-xl font-bold mb-5 text-center">Tham gia giải đấu</h2>
@@ -67,12 +130,15 @@ export default function HomePage() {
             <input
               type="text"
               className="input-field"
-              placeholder="Nhập tên của bạn..."
+              placeholder={profile?.nickname || 'Nhập tên của bạn...'}
               value={nickname}
               onChange={e => setNickname(e.target.value)}
               maxLength={20}
-              autoFocus
+              autoFocus={!roomCode}
             />
+            {user && profile && nickname === profile.nickname && (
+              <p className="text-xs text-slate-500 mt-1">Lấy từ tài khoản của bạn</p>
+            )}
           </div>
 
           <div>
@@ -84,6 +150,7 @@ export default function HomePage() {
               value={roomCode}
               onChange={e => setRoomCode(e.target.value.toUpperCase())}
               maxLength={6}
+              autoFocus={!!roomCode}
             />
           </div>
 

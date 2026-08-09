@@ -5,6 +5,16 @@ const crypto  = require('crypto');
 const { Server } = require('socket.io');
 const cors   = require('cors');
 const { Chess } = require('chess.js');
+const { createClient } = require('@supabase/supabase-js');
+
+// ─── Supabase admin client (service role — bypasses RLS) ─────────────────────
+const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
+  : null;
+if (supabase) console.log('[SUPABASE] Connected — player stats will be persisted.');
+else         console.log('[SUPABASE] Not configured — running in memory-only mode.');
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 
@@ -350,8 +360,58 @@ function resolveGameOver(match, tournament, roomCode, { winnerId, isDraw, oppone
   io.to(match.p2).emit('game_over', { ...base, eloChange: eloChangeP2 });
   io.to(`spectate_${match.id}`).emit('game_over', { ...base, isSpectating: true });
   broadcastTournamentState(roomCode);
+  // Persist to Supabase (fire-and-forget; don't block the game)
+  persistMatchResult(match, tournament, winnerId, isDraw, eloChangeP1, eloChangeP2).catch(() => {});
   // Pair any OTHER players who were already waiting before this game ended
   setTimeout(() => matchWaitingPlayers(roomCode), 100);
+}
+
+// ─── Supabase persistence ─────────────────────────────────────────────────────
+async function persistMatchResult(match, tournament, winnerId, isDraw, eloChangeP1, eloChangeP2) {
+  if (!supabase) return;
+  const p1 = tournament.players.get(match.p1);
+  const p2 = tournament.players.get(match.p2);
+  if (!p1 || !p2) return;
+
+  const winnerSbId = winnerId
+    ? (winnerId === match.p1 ? p1.supabaseId : p2.supabaseId)
+    : null;
+
+  // Insert match history row (only if at least one player is authenticated)
+  if (p1.supabaseId || p2.supabaseId) {
+    const { error: mErr } = await supabase.from('match_history').insert({
+      room_code:    tournament.roomCode,
+      game_type:    tournament.gameType,
+      p1_id:        p1.supabaseId || null,
+      p2_id:        p2.supabaseId || null,
+      winner_id:    winnerSbId,
+      is_draw:      isDraw,
+      elo_delta_p1: eloChangeP1,
+      elo_delta_p2: eloChangeP2,
+    });
+    if (mErr) console.error('[SUPABASE] match_history error:', mErr.message);
+  }
+
+  // Update ELO + stats for each authenticated player
+  // Player result for THIS match
+  const getResult = (player, playerId) => {
+    if (isDraw) return 'draw';
+    return winnerId === playerId ? 'win' : 'loss';
+  };
+  for (const [player, playerId] of [[p1, match.p1], [p2, match.p2]]) {
+    if (!player.supabaseId) continue;
+    const result = getResult(player, playerId);
+    const { error } = await supabase.from('profiles')
+      .update({
+        elo:    player.elo,
+        wins:   (player.dbWins   || 0) + (result === 'win'  ? 1 : 0),
+        losses: (player.dbLosses || 0) + (result === 'loss' ? 1 : 0),
+        draws:  (player.dbDraws  || 0) + (result === 'draw' ? 1 : 0),
+        streak: player.streak || 0,
+      })
+      .eq('id', player.supabaseId);
+    if (error) console.error('[SUPABASE] profile update error:', error.message);
+  }
 }
 
 // ─── REST API ─────────────────────────────────────────────────────────────────
@@ -419,11 +479,37 @@ io.on('connection', (socket) => {
     callback?.({ success: true, state: getTournamentPublicState(t) });
   });
 
-  socket.on('join_room', ({ roomCode, nickname }, callback) => {
+  socket.on('join_room', async ({ roomCode, nickname, supabaseToken }, callback) => {
     const code = roomCode?.toUpperCase();
     const t    = tournaments[code];
     if (!t) return callback({ success: false, message: 'Mã phòng không tồn tại!' });
     if (t.status === 'finished') return callback({ success: false, message: 'Giải đấu đã kết thúc!' });
+
+    // ── Supabase auth: verify token and load persistent ELO ──────────────────
+    let supabaseId = null, supabaseElo = ELO_START, dbWins = 0, dbLosses = 0, dbDraws = 0, dbStreak = 0;
+    if (supabase && supabaseToken) {
+      try {
+        const { data: { user }, error } = await supabase.auth.getUser(supabaseToken);
+        if (!error && user) {
+          supabaseId = user.id;
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('elo, wins, losses, draws, streak, nickname')
+            .eq('id', user.id)
+            .single();
+          if (profile) {
+            supabaseElo = profile.elo;
+            dbWins      = profile.wins;
+            dbLosses    = profile.losses;
+            dbDraws     = profile.draws;
+            dbStreak    = profile.streak;
+            // Use profile nickname if none provided
+            if (!nickname?.trim() && profile.nickname) nickname = profile.nickname;
+          }
+        }
+      } catch (e) { /* auth failure is non-fatal — fall back to guest */ }
+    }
+
     const trimmedNickname = nickname?.trim();
     if (!trimmedNickname) return callback({ success: false, message: 'Vui lòng nhập biệt danh!' });
 
@@ -494,8 +580,10 @@ io.on('connection', (socket) => {
     const player = {
       id: socket.id, socketId: socket.id, nickname: trimmedNickname,
       status: 'waiting',
-      score: 0, wins: 0, draws: 0, losses: 0, streak: 0,
-      elo: ELO_START,
+      score: 0, wins: 0, draws: 0, losses: 0, streak: dbStreak,
+      elo: supabaseElo,
+      // All-time DB stats (used when persisting back to Supabase)
+      supabaseId, dbWins, dbLosses, dbDraws,
       opponentHistory: new Set(),
       lastOpponent: null,
       waitingSince: t.status === 'active' ? Date.now() : null,
