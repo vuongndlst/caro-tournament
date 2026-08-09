@@ -666,6 +666,10 @@ io.on('connection', (socket) => {
       matchId, board: match.board, size: match.size, gameType: t.gameType, currentTurn: match.currentTurn, status: match.status,
       p1Nickname: t.players.get(match.p1)?.nickname||'?', p2Nickname: t.players.get(match.p2)?.nickname||'?',
       p1Id: match.p1, p2Id: match.p2,
+      // Chess clocks (null for non-chess)
+      p1TimeMs:   match.p1TimeMs  ?? null,
+      p2TimeMs:   match.p2TimeMs  ?? null,
+      chessIncMs: match.chessIncMs ?? null,
     }});
   });
   socket.on('stop_spectating', ({ matchId }) => {
