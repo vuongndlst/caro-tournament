@@ -3,10 +3,18 @@ import { socket } from '../socket';
 import Board from '../components/Board';
 import ChessBoard from '../components/ChessBoard';
 import ChessClock from '../components/ChessClock';
-import { Eye, X, Wifi, WifiOff } from 'lucide-react';
+import { Eye, X, Wifi, WifiOff, RotateCcw } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+
+function detectGameType(match) {
+  if (match?.gameType) return match.gameType;
+  if (typeof match?.board === 'string') return 'chess';
+  if (match?.size === 3 || match?.board?.length === 3) return 'tictactoe';
+  return 'caro';
+}
 
 export default function SpectatorPage() {
-  const params   = new URLSearchParams(window.location.search);
+  const [params] = useSearchParams();
   const matchId  = params.get('matchId');
   const roomCode = params.get('room');
 
@@ -19,6 +27,10 @@ export default function SpectatorPage() {
   // Chess clocks
   const [p1TimeMs, setP1TimeMs] = useState(null);
   const [p2TimeMs, setP2TimeMs] = useState(null);
+  const [turnStartedAt, setTurnStartedAt] = useState(null);
+  const [orientation, setOrientation] = useState('white');
+  const [result, setResult] = useState(null);
+  const [winningCells, setWinningCells] = useState(null);
 
   useEffect(() => {
     const onConnect    = () => setConnected(true);
@@ -38,12 +50,17 @@ export default function SpectatorPage() {
     socket.emit('spectate_match', { matchId, roomCode }, (res) => {
       if (!res?.success) { setError(res?.message || 'Không thể xem trận này.'); return; }
       const m = res.match;
-      setMatchData(m);
+      setMatchData({ ...m, gameType: detectGameType(m) });
       setBoard(m.board);
       setCurrentTurn(m.currentTurn);
+      setTurnStartedAt(m.turnStartedAt || Date.now());
       if (m.p1TimeMs != null) setP1TimeMs(m.p1TimeMs);
       if (m.p2TimeMs != null) setP2TimeMs(m.p2TimeMs);
-      if (m.status === 'finished') setEnded(true);
+      if (m.status === 'finished') {
+        setEnded(true);
+        setResult(m);
+        setWinningCells(m.winningCells || null);
+      }
     });
 
     const onMove = (data) => {
@@ -53,17 +70,28 @@ export default function SpectatorPage() {
       if (data.p1TimeMs != null) setP1TimeMs(data.p1TimeMs);
       if (data.p2TimeMs != null) setP2TimeMs(data.p2TimeMs);
     };
+    const onTurnStart = (data) => {
+      if (data.matchId !== matchId) return;
+      setCurrentTurn(data.currentTurn);
+      setTurnStartedAt(data.turnStartedAt || Date.now());
+      if (data.p1TimeMs != null) setP1TimeMs(data.p1TimeMs);
+      if (data.p2TimeMs != null) setP2TimeMs(data.p2TimeMs);
+    };
     const onOver = (data) => {
       if (data.matchId !== matchId) return;
       setEnded(true);
+      setResult(data);
+      setWinningCells(data.winningCells || null);
       if (data.board) setBoard(data.board);
     };
     socket.on('move_made', onMove);
+    socket.on('turn_start', onTurnStart);
     socket.on('game_over', onOver);
 
     return () => {
       socket.emit('stop_spectating', { matchId });
       socket.off('move_made', onMove);
+      socket.off('turn_start', onTurnStart);
       socket.off('game_over', onOver);
     };
   }, [connected, matchId, roomCode]);
@@ -79,6 +107,12 @@ export default function SpectatorPage() {
   const isChess = matchData?.gameType === 'chess';
   const p1Active = currentTurn === matchData?.p1Id;
   const p2Active = currentTurn === matchData?.p2Id;
+  const topChessPlayer = orientation === 'white'
+    ? { nickname: matchData?.p2Nickname, color: 'Đen', active: p2Active, timeMs: p2TimeMs, tone: 'red' }
+    : { nickname: matchData?.p1Nickname, color: 'Trắng', active: p1Active, timeMs: p1TimeMs, tone: 'blue' };
+  const bottomChessPlayer = orientation === 'white'
+    ? { nickname: matchData?.p1Nickname, color: 'Trắng', active: p1Active, timeMs: p1TimeMs, tone: 'blue' }
+    : { nickname: matchData?.p2Nickname, color: 'Đen', active: p2Active, timeMs: p2TimeMs, tone: 'red' };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 flex flex-col items-center p-4 gap-4">
@@ -105,6 +139,15 @@ export default function SpectatorPage() {
               ? <><Wifi className="w-3 h-3 text-green-400" /> Kết nối</>
               : <><WifiOff className="w-3 h-3 text-red-400" /> Mất kết nối</>}
           </div>
+          {isChess && (
+            <button
+              onClick={() => setOrientation(value => value === 'white' ? 'black' : 'white')}
+              className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+              title="Đổi góc nhìn bàn cờ"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+          )}
           <button onClick={() => window.close()} className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors">
             <X className="w-4 h-4" />
           </button>
@@ -119,31 +162,31 @@ export default function SpectatorPage() {
       {/* Chess layout: clocks + board */}
       {board && matchData && isChess && (
         <div className="w-full max-w-xl flex flex-col gap-3">
-          {/* Opponent (p2 = Black) row */}
+          {/* Player shown above the board */}
           <div className="flex items-center justify-between px-2">
-            <span className={`font-semibold text-sm ${p2Active ? 'text-red-300' : 'text-slate-500'}`}>
-              {matchData.p2Nickname} <span className="text-xs opacity-60">(Đen)</span>
+            <span className={`font-semibold text-sm ${topChessPlayer.active ? (topChessPlayer.tone === 'blue' ? 'text-blue-300' : 'text-red-300') : 'text-slate-500'}`}>
+              {topChessPlayer.nickname} <span className="text-xs opacity-60">({topChessPlayer.color})</span>
             </span>
-            {p2TimeMs != null && (
-              <ChessClock timeMs={p2TimeMs} isActive={!ended && p2Active} turnStartedAt={Date.now()} />
+            {topChessPlayer.timeMs != null && (
+              <ChessClock timeMs={topChessPlayer.timeMs} isActive={!ended && topChessPlayer.active} turnStartedAt={turnStartedAt} />
             )}
           </div>
 
           <ChessBoard
             fen={board}
-            yourSymbol="X"
+            yourSymbol={orientation === 'white' ? 'X' : 'O'}
             isMyTurn={false}
             onMove={() => {}}
             disabled={true}
           />
 
-          {/* My side (p1 = White) row */}
+          {/* Player shown below the board */}
           <div className="flex items-center justify-between px-2">
-            <span className={`font-semibold text-sm ${p1Active ? 'text-blue-300' : 'text-slate-500'}`}>
-              {matchData.p1Nickname} <span className="text-xs opacity-60">(Trắng)</span>
+            <span className={`font-semibold text-sm ${bottomChessPlayer.active ? (bottomChessPlayer.tone === 'blue' ? 'text-blue-300' : 'text-red-300') : 'text-slate-500'}`}>
+              {bottomChessPlayer.nickname} <span className="text-xs opacity-60">({bottomChessPlayer.color})</span>
             </span>
-            {p1TimeMs != null && (
-              <ChessClock timeMs={p1TimeMs} isActive={!ended && p1Active} turnStartedAt={Date.now()} />
+            {bottomChessPlayer.timeMs != null && (
+              <ChessClock timeMs={bottomChessPlayer.timeMs} isActive={!ended && bottomChessPlayer.active} turnStartedAt={turnStartedAt} />
             )}
           </div>
         </div>
@@ -180,6 +223,7 @@ export default function SpectatorPage() {
               isMyTurn={false}
               onCellClick={() => {}}
               disabled={true}
+              winningCells={winningCells}
             />
           </div>
         </>
@@ -188,7 +232,11 @@ export default function SpectatorPage() {
       {/* Ended badge */}
       {ended && (
         <div className="badge bg-slate-700/60 border border-slate-600/40 text-slate-300 text-sm px-4 py-2">
-          Trận đấu đã kết thúc
+          {result?.isDraw
+            ? 'Trận đấu kết thúc — Hòa'
+            : result?.winnerId
+              ? `Người thắng: ${result.winnerId === matchData?.p1Id ? matchData?.p1Nickname : matchData?.p2Nickname}`
+              : 'Trận đấu đã kết thúc'}
         </div>
       )}
 

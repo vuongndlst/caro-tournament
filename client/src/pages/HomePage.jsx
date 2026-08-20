@@ -6,16 +6,18 @@ import GameView from '../components/GameView';
 import RulesModal from '../components/RulesModal';
 import AuthPage from './AuthPage';
 import Footer from '../components/Footer';
-import { Gamepad2, LogIn, AlertCircle, HelpCircle, LogOut, User, Star } from 'lucide-react';
+import { Gamepad2, LogIn, AlertCircle, HelpCircle, LogOut, User, Star, Bot } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { usingSupabaseGameBackend } from '../socket';
 
 export default function HomePage() {
+  const [searchParams] = useSearchParams();
   const { role, playerStatus, joinRoom, error, clearError, connected } = useGame();
-  const { user, profile, loading: authLoading, signOut, getToken, supabaseEnabled } = useAuth();
+  const { user, profile, ratings, loading: authLoading, signOut, getToken, supabaseEnabled } = useAuth();
 
   // Pre-fill room code from QR scan: ?room=XXXXXX
   const [roomCode, setRoomCode] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-    return (params.get('room') || '').toUpperCase();
+    return (searchParams.get('room') || '').toUpperCase();
   });
   // Nickname: editable, but defaults to profile nickname when logged in
   const [nickname, setNickname] = useState('');
@@ -31,6 +33,10 @@ export default function HomePage() {
 
   const handleJoin = async (e) => {
     e.preventDefault();
+    if (usingSupabaseGameBackend && !user) {
+      setShowAuth(true);
+      return;
+    }
     setLocalError('');
     clearError();
     const nick = nickname.trim() || profile?.nickname?.trim();
@@ -94,10 +100,13 @@ export default function HomePage() {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-green-300 truncate">{profile.nickname}</p>
-                <p className="text-xs text-slate-400 flex items-center gap-1">
-                  <Star className="w-3 h-3 text-yellow-400" /> ELO: {profile.elo}
+                <p className="text-xs text-slate-400 flex items-center gap-1 flex-wrap">
+                  <Star className="w-3 h-3 text-yellow-400" />
+                  Caro {ratings?.caro?.elo ?? 1200}
                   <span className="text-slate-600">·</span>
-                  {profile.wins}T {profile.draws}H {profile.losses}B
+                  3×3 {ratings?.tictactoe?.elo ?? 1200}
+                  <span className="text-slate-600">·</span>
+                  Chess {ratings?.chess?.elo ?? 1200}
                 </p>
               </div>
               <button
@@ -183,12 +192,19 @@ export default function HomePage() {
         )}
       </div>
 
+      <Link
+        to="/practice"
+        className="w-full max-w-sm mt-3 flex items-center justify-center gap-2 rounded-xl border border-cyan-700/50 bg-cyan-950/30 hover:bg-cyan-900/40 py-2.5 text-sm font-semibold text-cyan-300 transition-colors"
+      >
+        <Bot className="w-4 h-4" /> Luyện tập với máy
+      </Link>
+
       <div className="flex items-center gap-4 mt-5 text-sm">
         <p className="text-slate-600">
           Bạn là giáo viên?{' '}
-          <a href="/admin" className="text-indigo-400 hover:text-indigo-300 font-medium transition-colors">
+          <Link to="/admin" className="text-indigo-400 hover:text-indigo-300 font-medium transition-colors">
             Tạo giải đấu →
-          </a>
+          </Link>
         </p>
         <span className="text-slate-700">·</span>
         <button

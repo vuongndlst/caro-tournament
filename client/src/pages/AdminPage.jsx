@@ -3,9 +3,13 @@ import { useGame } from '../context/GameContext';
 import AdminLogin from '../components/AdminLogin';
 import AdminDashboard from '../components/AdminDashboard';
 import { Shield, Plus, ArrowLeft, Pencil } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { socket, usingSupabaseGameBackend } from '../socket';
 
 export default function AdminPage() {
   const { role, createTournament, connected, roomCode } = useGame();
+  const { user, profile, loading: authLoading, signOut } = useAuth();
 
   const [adminToken,    setAdminToken]    = useState(() => localStorage.getItem('caro_admin_token') || '');
   const [adminUsername, setAdminUsername] = useState(() => localStorage.getItem('caro_admin_username') || '');
@@ -17,6 +21,9 @@ export default function AdminPage() {
   const [chessPreset, setChessPreset] = useState('5+3'); // '3+0' | '5+3' | '10+5' | 'custom'
   const [chessCustomMin, setChessCustomMin] = useState(5);
   const [chessCustomInc, setChessCustomInc] = useState(3);
+  const effectiveUsername = usingSupabaseGameBackend ? (profile?.nickname || user?.email || '') : adminUsername;
+  const effectiveToken = usingSupabaseGameBackend ? '' : adminToken;
+  const canManageTournaments = ['teacher', 'admin'].includes(profile?.role);
 
   const CHESS_PRESETS = {
     '3+0':  { label: '3 phút · 0s',   initialMs: 3 * 60 * 1000, incMs: 0 },
@@ -39,6 +46,7 @@ export default function AdminPage() {
 
   // If token exists, verify it on mount
   useEffect(() => {
+    if (usingSupabaseGameBackend) return;
     if (!adminToken) return;
     const SERVER = import.meta.env.VITE_SERVER_URL || '';
     fetch(`${SERVER}/api/auth/me`, {
@@ -57,16 +65,16 @@ export default function AdminPage() {
   }, [adminToken]);
 
   const handleLoginSuccess = (token, username) => {
+    if (usingSupabaseGameBackend) return;
     setAdminToken(token);
     setAdminUsername(username);
     // Update socket auth so future events carry the new token
-    import('../socket').then(({ socket }) => {
-      socket.auth = { token };
-      if (!socket.connected) socket.connect();
-    });
+    socket.auth = { token };
+    if (!socket.connected) socket.connect();
   };
 
   const handleLogout = () => {
+    if (usingSupabaseGameBackend) signOut();
     localStorage.removeItem('caro_admin_token');
     localStorage.removeItem('caro_admin_username');
     setAdminToken('');
@@ -76,17 +84,34 @@ export default function AdminPage() {
   const handleCreate = () => {
     setLoading(true);
     setError('');
-    createTournament(adminToken, tournamentName.trim(), gameType, getChessOpts(), (res) => {
+    createTournament(effectiveToken, tournamentName.trim(), gameType, getChessOpts(), (res) => {
       setLoading(false);
       if (!res.success) setError(res.message || 'Không thể tạo giải đấu, thử lại!');
     });
   };
 
-  // Not logged in → show login screen
-  if (!adminToken) return <AdminLogin onSuccess={handleLoginSuccess} />;
+  if (usingSupabaseGameBackend && authLoading) {
+    return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-400 rounded-full animate-spin" /></div>;
+  }
+
+  if (usingSupabaseGameBackend && user && !canManageTournaments) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+        <div className="card max-w-sm text-center">
+          <Shield className="w-10 h-10 text-amber-400 mx-auto mb-3" />
+          <h1 className="font-bold text-lg">Tài khoản chưa có quyền giáo viên</h1>
+          <p className="text-sm text-slate-400 mt-2">Tài khoản cần có vai trò giáo viên hoặc quản trị viên.</p>
+          <button onClick={handleLogout} className="btn-primary mt-4 w-full">Đăng xuất</button>
+        </div>
+      </div>
+    );
+  }
+
+  const isLoggedIn = usingSupabaseGameBackend ? !!user && canManageTournaments : !!adminToken;
+  if (!isLoggedIn) return <AdminLogin onSuccess={handleLoginSuccess} supabaseMode={usingSupabaseGameBackend} />;
 
   // Already created a tournament → show dashboard
-  if (role === 'admin' && roomCode) return <AdminDashboard onLogout={handleLogout} adminUsername={adminUsername} />;
+  if (role === 'admin' && roomCode) return <AdminDashboard onLogout={handleLogout} adminUsername={effectiveUsername} />;
 
   // Logged in but no tournament yet → create form
   return (
@@ -98,7 +123,7 @@ export default function AdminPage() {
           </div>
           <div className="text-right">
             <p className="text-xs text-slate-400">Đăng nhập với tư cách</p>
-            <p className="text-sm font-semibold text-indigo-300">{adminUsername}</p>
+            <p className="text-sm font-semibold text-indigo-300">{effectiveUsername}</p>
           </div>
         </div>
 
@@ -215,9 +240,9 @@ export default function AdminPage() {
       </div>
 
       <div className="flex gap-4 mt-5 text-sm text-slate-500">
-        <a href="/" className="hover:text-slate-300 flex items-center gap-1 transition-colors">
+        <Link to="/" className="hover:text-slate-300 flex items-center gap-1 transition-colors">
           <ArrowLeft className="w-4 h-4" /> Trang học sinh
-        </a>
+        </Link>
         <span>·</span>
         <button onClick={handleLogout} className="hover:text-red-400 transition-colors">Đăng xuất</button>
       </div>

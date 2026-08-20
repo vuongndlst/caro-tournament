@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { User, Mail, Lock, LogIn, UserPlus, ArrowRight } from 'lucide-react';
+import { usingSupabaseGameBackend } from '../socket';
 
 export default function AuthPage({ onSkip }) {
   const { signIn, signUp } = useAuth();
@@ -19,12 +20,17 @@ export default function AuthPage({ onSkip }) {
     try {
       if (mode === 'register') {
         if (!nickname.trim()) { setError('Vui lòng nhập biệt danh.'); setLoading(false); return; }
-        await signUp(email.trim(), password, nickname.trim());
-        setInfo('Đăng ký thành công! Kiểm tra email để xác nhận (nếu bật), sau đó đăng nhập.');
-        setMode('login');
+        const data = await signUp(email.trim(), password, nickname.trim());
+        if (data?.session) {
+          setInfo('Đăng ký thành công!');
+          onSkip?.();
+        } else {
+          setInfo('Đăng ký thành công! Kiểm tra email để xác nhận, sau đó đăng nhập.');
+          setMode('login');
+        }
       } else {
         await signIn(email.trim(), password);
-        // onAuthStateChange in AuthContext will update user → App re-renders
+        onSkip?.();
       }
     } catch (err) {
       setError(err.message || 'Có lỗi xảy ra, thử lại.');
@@ -116,10 +122,10 @@ export default function AuthPage({ onSkip }) {
             <input
               type="password"
               className="input-field"
-              placeholder={mode === 'register' ? 'Ít nhất 6 ký tự' : '••••••••'}
+              placeholder={mode === 'register' ? 'Ít nhất 8 ký tự' : '••••••••'}
               value={password}
               onChange={e => setPassword(e.target.value)}
-              minLength={6}
+              minLength={8}
               required
             />
           </div>
@@ -145,7 +151,7 @@ export default function AuthPage({ onSkip }) {
             onClick={onSkip}
             className="mt-4 w-full text-center text-xs text-slate-500 hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
           >
-            Tiếp tục không đăng nhập <ArrowRight className="w-3 h-3" />
+            {usingSupabaseGameBackend ? 'Quay lại' : 'Tiếp tục không đăng nhập'} <ArrowRight className="w-3 h-3" />
           </button>
         )}
       </div>

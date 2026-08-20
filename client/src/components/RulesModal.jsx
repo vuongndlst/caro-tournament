@@ -101,6 +101,30 @@ export default function RulesModal({ onClose }) {
                   </div>
                 </div>
               </div>
+
+              <div className="bg-slate-800/60 rounded-xl p-4">
+                <h3 className="font-bold text-slate-200 mb-2 text-xs">🎯 ELO và cấp bậc</h3>
+                <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
+                  Điểm giải đấu (3–1–0) quyết định thứ hạng trong lớp. ELO là chỉ số năng lực lâu dài,
+                  dùng để ghép đối thủ cân bằng. Chuỗi thắng chỉ là huy hiệu phong độ, không cộng thêm ELO.
+                </p>
+                <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                  {[
+                    ['🎯', 'Định hạng', '5 trận đầu'],
+                    ['🪵', 'Gỗ', '< 1000'],
+                    ['🥉', 'Đồng', '1000–1199'],
+                    ['🥈', 'Bạc', '1200–1399'],
+                    ['🏆', 'Vàng', '1400–1599'],
+                    ['💎', 'Kim Cương', '1600–1799'],
+                    ['🔮', 'Cao Thủ', '≥ 1800'],
+                  ].map(([emoji, name, range]) => (
+                    <div key={name} className="flex items-center justify-between gap-2 bg-slate-900/60 rounded-lg px-2.5 py-1.5">
+                      <span className="text-slate-300">{emoji} {name}</span>
+                      <span className="text-slate-500">{range}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 

@@ -3,6 +3,7 @@ import { useGame } from '../context/GameContext';
 import RulesModal from './RulesModal';
 import PlayerStatsModal from './PlayerStatsModal';
 import Footer from './Footer';
+import { getAppUrl } from '../utils/urls';
 import { startMusic, stopMusic, setMusicMuted } from '../utils/music';
 import {
   Users, Swords, Trophy, Play, Copy, CheckCheck,
@@ -43,7 +44,7 @@ export default function AdminDashboard({ onLogout, adminUsername }) {
   };
 
   // Build the join URL for the QR code
-  const joinUrl = `${window.location.origin}/?room=${roomCode}`;
+  const joinUrl = getAppUrl('/', { room: roomCode });
 
   const copyCode = () => {
     navigator.clipboard.writeText(roomCode);
@@ -320,7 +321,7 @@ export default function AdminDashboard({ onLogout, adminUsername }) {
                         <span className="text-xs text-slate-500">Đang chơi...</span>
                       </div>
                       <button
-                        onClick={() => window.open(`/spectate?matchId=${m.id}&room=${roomCode}`, '_blank')}
+                        onClick={() => window.open(getAppUrl('/spectate', { matchId: m.id, room: roomCode }), '_blank', 'noopener,noreferrer')}
                         className="flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 transition-colors"
                         title="Xem trực tiếp trong tab mới"
                       >

@@ -105,6 +105,11 @@ export default function LobbyView() {
               #{myRank} BXH
             </span>
           )}
+          {myStats?.rank && (
+            <span className="badge bg-indigo-900/40 text-indigo-200 border border-indigo-700/30 text-xs">
+              {myStats.rank.emoji} {myStats.rank.name} · {myStats.elo} ELO
+            </span>
+          )}
           {myStats?.streak >= 2 && (
             <span className="badge bg-orange-900/40 text-orange-300 border border-orange-700/30 text-xs">
               🔥 {myStats.streak} trận thắng liên tiếp

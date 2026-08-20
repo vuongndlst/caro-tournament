@@ -55,6 +55,7 @@ function getCapturedPieces(fen, capturedBy) {
 
 // ── Rank badge ─────────────────────────────────────────────────────────────────
 const RANK_TEXT = {
+  indigo: 'text-indigo-300',
   purple: 'text-purple-400', cyan: 'text-cyan-400', yellow: 'text-yellow-400',
   slate:  'text-slate-300',  orange: 'text-orange-400', amber: 'text-amber-500',
 };

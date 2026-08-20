@@ -4,6 +4,13 @@ import ChessBoard from './ChessBoard';
 import { socket } from '../socket';
 import { Eye, X, User } from 'lucide-react';
 
+function detectGameType(match) {
+  if (match?.gameType) return match.gameType;
+  if (typeof match?.board === 'string') return 'chess';
+  if (match?.size === 3 || match?.board?.length === 3) return 'tictactoe';
+  return 'caro';
+}
+
 /**
  * Modal overlay that lets a waiting player watch an active match live.
  *
@@ -27,7 +34,7 @@ export default function SpectatorView({ matchId, roomCode, onClose }) {
         setError(res.message || 'Không thể xem trận này');
         return;
       }
-      setMatchData(res.match);
+      setMatchData({ ...res.match, gameType: detectGameType(res.match) });
       setBoard(res.match.board);
       setTurn(res.match.currentTurn);
       if (res.match.status === 'finished') setEnded(true);

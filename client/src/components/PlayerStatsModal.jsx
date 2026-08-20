@@ -3,6 +3,7 @@ import { X, Trophy, Sword, Handshake, Skull, TrendingUp, Clock } from 'lucide-re
 import { socket } from '../socket';
 
 const RANK_COLORS = {
+  indigo: 'text-indigo-300 bg-indigo-900/30 border-indigo-700/40',
   purple: 'text-purple-400 bg-purple-900/30 border-purple-700/40',
   cyan:   'text-cyan-400 bg-cyan-900/30 border-cyan-700/40',
   yellow: 'text-yellow-400 bg-yellow-900/30 border-yellow-700/40',
@@ -63,8 +64,21 @@ export default function PlayerStatsModal({ roomCode, playerId, onClose }) {
             <div className="space-y-4">
               {/* Score & rank */}
               <div className="bg-indigo-900/30 border border-indigo-700/40 rounded-xl p-4 text-center">
-                <p className="text-xs text-indigo-300 mb-1">Tổng điểm</p>
-                <p className="text-4xl font-black text-white">{stats.score}<span className="text-xl text-indigo-400">đ</span></p>
+                <div className="grid grid-cols-2 divide-x divide-indigo-700/40">
+                  <div>
+                    <p className="text-xs text-indigo-300 mb-1">Điểm giải đấu</p>
+                    <p className="text-3xl font-black text-white">{stats.score}<span className="text-base text-indigo-400">đ</span></p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-indigo-300 mb-1">ELO năng lực</p>
+                    <p className="text-3xl font-black text-white">{stats.elo}</p>
+                  </div>
+                </div>
+                {stats.rank?.name === 'Định hạng' && (
+                  <p className="text-indigo-300 text-xs mt-2">
+                    Cần thêm {Math.max(0, 5 - (stats.ratedGames || 0))} trận để hoàn tất định hạng
+                  </p>
+                )}
                 {stats.streak >= 2 && (
                   <p className="text-orange-400 text-sm font-bold mt-1">🔥 {stats.streak} trận thắng liên tiếp</p>
                 )}

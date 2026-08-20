@@ -21,9 +21,10 @@ export default function ChessClock({ timeMs, isActive, turnStartedAt }) {
   // Whenever the server gives us a fresh timeMs (new turn), re-anchor
   useEffect(() => {
     baseMs.current = timeMs ?? 0;
-    baseTs.current = Date.now();
-    setDisplayMs(timeMs ?? 0);
-  }, [timeMs]);
+    baseTs.current = turnStartedAt || Date.now();
+    const elapsed = isActive ? Math.max(0, Date.now() - baseTs.current) : 0;
+    setDisplayMs(Math.max(0, (timeMs ?? 0) - elapsed));
+  }, [timeMs, turnStartedAt, isActive]);
 
   // Tick every 100 ms while active
   useEffect(() => {
@@ -33,7 +34,7 @@ export default function ChessClock({ timeMs, isActive, turnStartedAt }) {
       setDisplayMs(Math.max(0, baseMs.current - elapsed));
     }, 100);
     return () => clearInterval(id);
-  }, [isActive, timeMs]);           // re-run when turn switches
+  }, [isActive, timeMs, turnStartedAt]); // re-run when server starts a new turn
 
   // Format MM:SS
   const totalS  = Math.ceil(displayMs / 1000);

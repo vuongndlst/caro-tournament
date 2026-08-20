@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { Shield, LogIn, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 const SERVER = import.meta.env.VITE_SERVER_URL || '';
 
-export default function AdminLogin({ onSuccess }) {
+export default function AdminLogin({ onSuccess, supabaseMode = false }) {
+  const { signIn } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPw,   setShowPw]   = useState(false);
@@ -15,6 +18,11 @@ export default function AdminLogin({ onSuccess }) {
     setError('');
     setLoading(true);
     try {
+      if (supabaseMode) {
+        const data = await signIn(username.trim(), password);
+        onSuccess(data?.session?.access_token || '', data?.user?.email || username.trim());
+        return;
+      }
       const res  = await fetch(`${SERVER}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -28,8 +36,8 @@ export default function AdminLogin({ onSuccess }) {
       } else {
         setError(data.message || 'Đăng nhập thất bại!');
       }
-    } catch {
-      setError('Không thể kết nối server, thử lại!');
+    } catch (err) {
+      setError(err?.message || 'Không thể đăng nhập, thử lại!');
     } finally {
       setLoading(false);
     }
@@ -56,11 +64,11 @@ export default function AdminLogin({ onSuccess }) {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">Tên đăng nhập</label>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">{supabaseMode ? 'Email giáo viên' : 'Tên đăng nhập'}</label>
             <input
-              type="text"
+              type={supabaseMode ? 'email' : 'text'}
               className="input-field"
-              placeholder="giaovien"
+              placeholder={supabaseMode ? 'giaovien@truong.edu.vn' : 'giaovien'}
               value={username}
               onChange={e => setUsername(e.target.value)}
               autoFocus
@@ -105,9 +113,9 @@ export default function AdminLogin({ onSuccess }) {
 
       </div>
 
-      <a href="/" className="mt-5 text-slate-500 hover:text-slate-300 text-sm transition-colors">
+      <Link to="/" className="mt-5 text-slate-500 hover:text-slate-300 text-sm transition-colors">
         ← Về trang học sinh
-      </a>
+      </Link>
     </div>
   );
 }

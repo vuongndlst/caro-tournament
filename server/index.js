@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const cors   = require('cors');
 const { Chess } = require('chess.js');
 const { createClient } = require('@supabase/supabase-js');
+const { ELO_START, getRankInfo, calculateEloPair } = require('./elo');
 
 // ─── Supabase admin client (service role — bypasses RLS) ─────────────────────
 const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
@@ -46,8 +47,6 @@ const CHESS_INITIAL_TIME_MS = Number(process.env.CHESS_TIMEOUT_TEST_MS) || (5 * 
 const CHESS_INCREMENT_MS    = process.env.CHESS_TIMEOUT_TEST_MS ? 0 : 3_000;                 // seconds added per move (0 in test mode)
 const RECONNECT_WAIT_MS     = 20_000; // window before forfeit on disconnect
 const MOVE_RATE_MS      = 400;    // minimum ms between moves (anti-spam)
-const ELO_START         = 1200;
-const ELO_K_BASE        = 32;
 
 // ─── In-memory state ──────────────────────────────────────────────────────────
 const tournaments      = {};
@@ -69,28 +68,6 @@ function verifyAdminToken(token) {
   if (!s) return null;
   if (Date.now() > s.expiresAt) { adminSessions.delete(token); return null; }
   return s;
-}
-
-// ─── Rank helpers (ELO-based) ─────────────────────────────────────────────────
-function getRankInfo(elo) {
-  if (elo >= 1500) return { name: 'Cao Thủ',    index: 5, emoji: '🔮', color: 'purple' };
-  if (elo >= 1400) return { name: 'Kim Cương',   index: 4, emoji: '💎', color: 'cyan'   };
-  if (elo >= 1300) return { name: 'Vàng',        index: 3, emoji: '🏆', color: 'yellow' };
-  if (elo >= 1200) return { name: 'Bạc',         index: 2, emoji: '🥈', color: 'slate'  };
-  if (elo >= 1100) return { name: 'Đồng',        index: 1, emoji: '🥉', color: 'orange' };
-  return                  { name: 'Gỗ',          index: 0, emoji: '🪵', color: 'amber'  };
-}
-
-// ─── ELO calculation ──────────────────────────────────────────────────────────
-/**
- * Returns the ELO delta for 'my' side.
- * result: 1 = win, 0.5 = draw, 0 = loss
- * streak: winning streak, boosts K factor to reward consistency
- */
-function calcEloChange(myElo, oppElo, result, streak = 0) {
-  const expected = 1 / (1 + Math.pow(10, (oppElo - myElo) / 400));
-  const k = streak >= 5 ? ELO_K_BASE * 1.5 : streak >= 3 ? ELO_K_BASE * 1.25 : ELO_K_BASE;
-  return Math.round(k * (result - expected));
 }
 
 // ─── Other helpers ────────────────────────────────────────────────────────────
@@ -145,9 +122,12 @@ function getTournamentPublicState(tournament) {
     .map(p => ({
       id: p.id, nickname: p.nickname, elo: p.elo, score: p.score,
       wins: p.wins, draws: p.draws, losses: p.losses,
-      status: p.status, streak: p.streak || 0, rank: getRankInfo(p.elo),
+      status: p.status, streak: p.streak || 0, ratedGames: p.ratedGames || 0,
+      rank: getRankInfo(p.elo, p.ratedGames || 0),
     }))
-    .sort((a,b) => b.elo - a.elo || b.wins - a.wins);
+    // Tournament placement follows the classroom rule: win 3, draw 1, loss 0.
+    // Persistent ELO is only a tie-breaker and is used for matchmaking.
+    .sort((a,b) => b.score - a.score || b.wins - a.wins || b.elo - a.elo);
   const onlinePlayers = players
     .filter(p => p.status !== 'offline' && p.status !== 'reconnecting')
     .map(p => ({ id: p.id, nickname: p.nickname, status: p.status === 'result' ? 'waiting' : p.status }));
@@ -223,7 +203,10 @@ function handleTurnTimeout(matchId, roomCode) {
 
 // ─── Matchmaking ──────────────────────────────────────────────────────────────
 function pairingScore(p1, p2, now) {
-  const rankDiff = Math.abs(getRankInfo(p1.elo).index - getRankInfo(p2.elo).index);
+  const rankDiff = Math.abs(
+    getRankInfo(p1.elo, p1.ratedGames || 0).index -
+    getRankInfo(p2.elo, p2.ratedGames || 0).index
+  );
   const p1Wait = (now - (p1.waitingSince || now)) / 1000;
   const p2Wait = (now - (p2.waitingSince || now)) / 1000;
   const minWait = Math.min(p1Wait, p2Wait);
@@ -328,26 +311,26 @@ function resolveGameOver(match, tournament, roomCode, { winnerId, isDraw, oppone
 
   if (p1 && p2) {
     const oldEloP1 = p1.elo, oldEloP2 = p2.elo;
+    const p1Result = isDraw ? 0.5 : winnerId === match.p1 ? 1 : 0;
+    const eloResult = calculateEloPair(
+      oldEloP1, oldEloP2, p1Result,
+      p1.ratedGames || 0, p2.ratedGames || 0,
+    );
+    eloChangeP1 = eloResult.p1Delta;
+    eloChangeP2 = eloResult.p2Delta;
     if (isDraw) {
-      eloChangeP1 = calcEloChange(oldEloP1, oldEloP2, 0.5, 0);
-      eloChangeP2 = calcEloChange(oldEloP2, oldEloP1, 0.5, 0);
       p1.draws++; p1.score += 1; p1.streak = 0; p1.status = 'result'; p1.waitingSince = null;
       p2.draws++; p2.score += 1; p2.streak = 0; p2.status = 'result'; p2.waitingSince = null;
     } else if (winnerId) {
-      const [winner, loser, winnerOldElo, loserOldElo] =
-        winnerId === match.p1 ? [p1, p2, oldEloP1, oldEloP2] : [p2, p1, oldEloP2, oldEloP1];
+      const [winner, loser] = winnerId === match.p1 ? [p1, p2] : [p2, p1];
       const newStreak = (winner.streak || 0) + 1;
-      eloChangeP1 = winnerId === match.p1
-        ? calcEloChange(winnerOldElo, loserOldElo, 1, newStreak)
-        : calcEloChange(p1.elo, p2.elo, 0, 0);
-      eloChangeP2 = winnerId === match.p2
-        ? calcEloChange(winnerOldElo, loserOldElo, 1, newStreak)
-        : calcEloChange(p2.elo, p1.elo, 0, 0);
       winner.wins++; winner.score += 3; winner.streak = newStreak; winner.status = 'result'; winner.waitingSince = null;
       loser.losses++;            loser.streak = 0;               loser.status  = 'result'; loser.waitingSince  = null;
     }
-    p1.elo = Math.max(800, p1.elo + eloChangeP1);
-    p2.elo = Math.max(800, p2.elo + eloChangeP2);
+    p1.elo = eloResult.p1Elo;
+    p2.elo = eloResult.p2Elo;
+    p1.ratedGames = (p1.ratedGames || 0) + 1;
+    p2.ratedGames = (p2.ratedGames || 0) + 1;
   }
 
   const base = {
@@ -401,16 +384,28 @@ async function persistMatchResult(match, tournament, winnerId, isDraw, eloChange
   for (const [player, playerId] of [[p1, match.p1], [p2, match.p2]]) {
     if (!player.supabaseId) continue;
     const result = getResult(player, playerId);
-    const { error } = await supabase.from('profiles')
-      .update({
+    const nextDbWins   = (player.dbWins   || 0) + (result === 'win'  ? 1 : 0);
+    const nextDbLosses = (player.dbLosses || 0) + (result === 'loss' ? 1 : 0);
+    const nextDbDraws  = (player.dbDraws  || 0) + (result === 'draw' ? 1 : 0);
+    const { error } = await supabase.from('profile_game_ratings')
+      .upsert({
+        user_id: player.supabaseId,
+        game_type: tournament.gameType,
         elo:    player.elo,
-        wins:   (player.dbWins   || 0) + (result === 'win'  ? 1 : 0),
-        losses: (player.dbLosses || 0) + (result === 'loss' ? 1 : 0),
-        draws:  (player.dbDraws  || 0) + (result === 'draw' ? 1 : 0),
+        wins:   nextDbWins,
+        losses: nextDbLosses,
+        draws:  nextDbDraws,
         streak: player.streak || 0,
-      })
-      .eq('id', player.supabaseId);
-    if (error) console.error('[SUPABASE] profile update error:', error.message);
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id,game_type' });
+    if (error) {
+      console.error('[SUPABASE] game rating update error:', error.message);
+    } else {
+      // Keep the in-memory all-time counters in sync for subsequent matches.
+      player.dbWins = nextDbWins;
+      player.dbLosses = nextDbLosses;
+      player.dbDraws = nextDbDraws;
+    }
   }
 }
 
@@ -494,17 +489,26 @@ io.on('connection', (socket) => {
           supabaseId = user.id;
           const { data: profile } = await supabase
             .from('profiles')
-            .select('elo, wins, losses, draws, streak, nickname')
+            .select('nickname')
             .eq('id', user.id)
             .single();
           if (profile) {
-            supabaseElo = profile.elo;
-            dbWins      = profile.wins;
-            dbLosses    = profile.losses;
-            dbDraws     = profile.draws;
-            dbStreak    = profile.streak;
             // Use profile nickname if none provided
             if (!nickname?.trim() && profile.nickname) nickname = profile.nickname;
+          }
+
+          // Caro, Tic-tac-toe and Chess each have an independent rating.
+          const { data: rating } = await supabase
+            .from('profile_game_ratings')
+            .select('elo, wins, losses, draws, streak')
+            .match({ user_id: user.id, game_type: t.gameType })
+            .maybeSingle();
+          if (rating) {
+            supabaseElo = rating.elo;
+            dbWins      = rating.wins;
+            dbLosses    = rating.losses;
+            dbDraws     = rating.draws;
+            dbStreak    = rating.streak;
           }
         }
       } catch (e) { /* auth failure is non-fatal — fall back to guest */ }
@@ -581,7 +585,7 @@ io.on('connection', (socket) => {
       id: socket.id, socketId: socket.id, nickname: trimmedNickname,
       status: 'waiting',
       score: 0, wins: 0, draws: 0, losses: 0, streak: dbStreak,
-      elo: supabaseElo,
+      elo: supabaseElo, ratedGames: dbWins + dbLosses + dbDraws,
       // All-time DB stats (used when persisting back to Supabase)
       supabaseId, dbWins, dbLosses, dbDraws,
       opponentHistory: new Set(),
@@ -758,6 +762,10 @@ io.on('connection', (socket) => {
       p1TimeMs:   match.p1TimeMs  ?? null,
       p2TimeMs:   match.p2TimeMs  ?? null,
       chessIncMs: match.chessIncMs ?? null,
+      turnStartedAt: match.turnClockStarted ?? null,
+      turnDurationMs: t.gameType === 'chess'
+        ? (match.currentTurn === match.p1 ? match.p1TimeMs : match.p2TimeMs)
+        : (match.turnDurationMs || TURN_TIMEOUT_MS),
     }});
   });
   socket.on('stop_spectating', ({ matchId }) => {
@@ -782,7 +790,8 @@ io.on('connection', (socket) => {
     callback?.({ success: true, stats: {
       id: p.id, nickname: p.nickname, elo: p.elo, score: p.score,
       wins: p.wins, draws: p.draws, losses: p.losses, streak: p.streak,
-      rank: getRankInfo(p.elo), matchHistory, opponentCount: p.opponentHistory.size,
+      ratedGames: p.ratedGames || 0,
+      rank: getRankInfo(p.elo, p.ratedGames || 0), matchHistory, opponentCount: p.opponentHistory.size,
     }});
   });
 
