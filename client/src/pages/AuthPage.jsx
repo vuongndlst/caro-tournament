@@ -20,6 +20,10 @@ export default function AuthPage({ onSkip }) {
     try {
       if (mode === 'register') {
         if (!nickname.trim()) { setError('Vui lòng nhập biệt danh.'); setLoading(false); return; }
+        if (password.length < 10 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
+          setError('Mật khẩu cần ít nhất 10 ký tự, gồm chữ hoa, chữ thường, số và ký tự đặc biệt.');
+          setLoading(false); return;
+        }
         const data = await signUp(email.trim(), password, nickname.trim());
         if (data?.session) {
           setInfo('Đăng ký thành công!');
@@ -122,10 +126,10 @@ export default function AuthPage({ onSkip }) {
             <input
               type="password"
               className="input-field"
-              placeholder={mode === 'register' ? 'Ít nhất 8 ký tự' : '••••••••'}
+              placeholder={mode === 'register' ? 'Ít nhất 10 ký tự' : '••••••••'}
               value={password}
               onChange={e => setPassword(e.target.value)}
-              minLength={8}
+              minLength={mode === 'register' ? 10 : 6}
               required
             />
           </div>

@@ -5,6 +5,9 @@ const ELO_FLOOR = 800;
 const ELO_CEILING = 3000;
 const PLACEMENT_GAMES = 5;
 const PROVISIONAL_GAMES = 10;
+const MAX_PLACEMENT_DELTA = 32;
+const MAX_STANDARD_DELTA = 20;
+const MAX_MASTER_DELTA = 12;
 
 function getRankInfo(elo, ratedGames = Number.POSITIVE_INFINITY) {
   if (ratedGames < PLACEMENT_GAMES) {
@@ -19,9 +22,16 @@ function getRankInfo(elo, ratedGames = Number.POSITIVE_INFINITY) {
 }
 
 function getKFactor(p1Elo, p2Elo, p1Games = 0, p2Games = 0) {
-  if (p1Games < PROVISIONAL_GAMES || p2Games < PROVISIONAL_GAMES) return 40;
+  if (p1Games < PLACEMENT_GAMES || p2Games < PLACEMENT_GAMES) return 48;
+  if (p1Games < PROVISIONAL_GAMES || p2Games < PROVISIONAL_GAMES) return 32;
   if ((p1Elo + p2Elo) / 2 >= 1800) return 16;
   return 24;
+}
+
+function getMaxDelta(p1Elo, p2Elo, p1Games = 0, p2Games = 0) {
+  if (p1Games < PROVISIONAL_GAMES || p2Games < PROVISIONAL_GAMES) return MAX_PLACEMENT_DELTA;
+  if ((p1Elo + p2Elo) / 2 >= 1800) return MAX_MASTER_DELTA;
+  return MAX_STANDARD_DELTA;
 }
 
 /**
@@ -31,8 +41,10 @@ function getKFactor(p1Elo, p2Elo, p1Games = 0, p2Games = 0) {
  */
 function calculateEloPair(p1Elo, p2Elo, p1Result, p1Games = 0, p2Games = 0) {
   const k = getKFactor(p1Elo, p2Elo, p1Games, p2Games);
+  const maxDelta = getMaxDelta(p1Elo, p2Elo, p1Games, p2Games);
   const expectedP1 = 1 / (1 + Math.pow(10, (p2Elo - p1Elo) / 400));
   let p1Delta = Math.round(k * (p1Result - expectedP1));
+  p1Delta = Math.max(-maxDelta, Math.min(maxDelta, p1Delta));
 
   // Keep the pair strictly zero-sum even when one rating reaches a boundary.
   if (p1Delta > 0) {
@@ -47,6 +59,7 @@ function calculateEloPair(p1Elo, p2Elo, p1Result, p1Games = 0, p2Games = 0) {
     p1Elo: p1Elo + p1Delta,
     p2Elo: p2Elo - p1Delta,
     k,
+    maxDelta,
     expectedP1,
   };
 }
@@ -57,7 +70,11 @@ module.exports = {
   ELO_CEILING,
   PLACEMENT_GAMES,
   PROVISIONAL_GAMES,
+  MAX_PLACEMENT_DELTA,
+  MAX_STANDARD_DELTA,
+  MAX_MASTER_DELTA,
   getRankInfo,
   getKFactor,
+  getMaxDelta,
   calculateEloPair,
 };

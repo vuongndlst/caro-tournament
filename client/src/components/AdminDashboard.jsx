@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useGame } from '../context/GameContext';
+import { useAuth } from '../context/AuthContext';
+import { Link } from 'react-router-dom';
 import RulesModal from './RulesModal';
 import PlayerStatsModal from './PlayerStatsModal';
 import Footer from './Footer';
@@ -9,12 +11,13 @@ import {
   Users, Swords, Trophy, Play, Copy, CheckCheck,
   Wifi, WifiOff, Crown, Circle, Shield, QrCode, X,
   StopCircle, Flag, HelpCircle, Volume2, VolumeX,
-  ExternalLink, LogOut, User
+  ExternalLink, LogOut, User, Settings
 } from 'lucide-react';
 import { isMuted, toggleMute } from '../utils/sounds';
 
 export default function AdminDashboard({ onLogout, adminUsername }) {
   const { roomCode, tournamentState, startTournament, endTournament, connected } = useGame();
+  const { profile } = useAuth();
   const [copied, setCopied]     = useState(false);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState('');
@@ -97,6 +100,11 @@ export default function AdminDashboard({ onLogout, adminUsername }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {profile?.role === 'admin' && (
+              <Link to="/admin/accounts" className="p-2 rounded-lg bg-slate-700/50 hover:bg-indigo-700/60 border border-slate-600/40 transition-colors" title="Quản trị hệ thống">
+                <Settings className="w-4 h-4 text-indigo-300" />
+              </Link>
+            )}
             <button
               onClick={() => setShowRules(true)}
               className="p-2 rounded-lg bg-slate-700/50 hover:bg-slate-700 border border-slate-600/40 text-slate-400 hover:text-slate-200 transition-colors"

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useGame } from '../context/GameContext';
 import AdminLogin from '../components/AdminLogin';
 import AdminDashboard from '../components/AdminDashboard';
-import { Shield, Plus, ArrowLeft, Pencil } from 'lucide-react';
+import { Shield, Plus, ArrowLeft, Pencil, Settings } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { socket, usingSupabaseGameBackend } from '../socket';
@@ -17,8 +17,9 @@ export default function AdminPage() {
   const [error,         setError]         = useState('');
   const [tournamentName, setTournamentName] = useState('');
   const [gameType, setGameType] = useState('caro');
+  const [isRated, setIsRated] = useState(true);
   // Chess time controls
-  const [chessPreset, setChessPreset] = useState('5+3'); // '3+0' | '5+3' | '10+5' | 'custom'
+  const [chessPreset, setChessPreset] = useState('5+3');
   const [chessCustomMin, setChessCustomMin] = useState(5);
   const [chessCustomInc, setChessCustomInc] = useState(3);
   const effectiveUsername = usingSupabaseGameBackend ? (profile?.nickname || user?.email || '') : adminUsername;
@@ -26,22 +27,24 @@ export default function AdminPage() {
   const canManageTournaments = ['teacher', 'admin'].includes(profile?.role);
 
   const CHESS_PRESETS = {
-    '3+0':  { label: '3 phút · 0s',   initialMs: 3 * 60 * 1000, incMs: 0 },
-    '5+3':  { label: '5 phút · +3s',  initialMs: 5 * 60 * 1000, incMs: 3_000 },
-    '10+5': { label: '10 phút · +5s', initialMs: 10 * 60 * 1000, incMs: 5_000 },
-    'custom': { label: 'Tuỳ chỉnh', initialMs: null, incMs: null },
+    '3+2':   { label: '⚡ Chớp · 3+2', initialMs: 3 * 60 * 1000, incMs: 2_000, mode: 'blitz' },
+    '5+3':   { label: '🏃 Nhanh · 5+3', initialMs: 5 * 60 * 1000, incMs: 3_000, mode: 'rapid' },
+    '10+0':  { label: '🏃 Nhanh · 10+0', initialMs: 10 * 60 * 1000, incMs: 0, mode: 'rapid' },
+    '15+10': { label: '🏆 Chuẩn · 15+10', initialMs: 15 * 60 * 1000, incMs: 10_000, mode: 'standard' },
+    'custom': { label: '⚙️ Tuỳ chỉnh', initialMs: null, incMs: null, mode: 'custom' },
   };
 
   const getChessOpts = () => {
-    if (gameType !== 'chess') return {};
+    if (gameType !== 'chess') return { isRated };
     if (chessPreset === 'custom') {
       return {
         chessInitialMs: Math.max(1, chessCustomMin) * 60 * 1000,
         chessIncMs: Math.max(0, chessCustomInc) * 1000,
+        chessMode: 'custom', isRated,
       };
     }
     const p = CHESS_PRESETS[chessPreset];
-    return { chessInitialMs: p.initialMs, chessIncMs: p.incMs };
+    return { chessInitialMs: p.initialMs, chessIncMs: p.incMs, chessMode: p.mode, isRated };
   };
 
   // If token exists, verify it on mount
@@ -116,7 +119,7 @@ export default function AdminPage() {
   // Logged in but no tournament yet → create form
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 p-4">
-      <div className="card w-full max-w-sm animate-fade-in">
+      <div className="card w-full max-w-md animate-fade-in">
         <div className="flex items-center justify-between mb-1">
           <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-900/60">
             <Shield className="w-7 h-7 text-white" />
@@ -166,6 +169,12 @@ export default function AdminPage() {
             <option value="chess">Cờ Vua (8x8)</option>
           </select>
         </div>
+
+        <button type="button" onClick={() => setIsRated(value => !value)}
+          className={`mb-4 w-full flex items-center justify-between rounded-xl border px-3 py-2.5 text-left transition-colors ${isRated ? 'bg-emerald-900/25 border-emerald-700/40' : 'bg-slate-800/60 border-slate-700'}`}>
+          <div><p className="text-sm font-semibold">{isRated ? 'Đấu xếp hạng' : 'Đấu thường'}</p><p className="text-xs text-slate-500">{isRated ? 'Kết quả cập nhật ELO học kỳ và toàn thời gian' : 'Không thay đổi ELO'}</p></div>
+          <span className={`w-10 h-5 rounded-full p-0.5 ${isRated ? 'bg-emerald-500' : 'bg-slate-600'}`}><span className={`block w-4 h-4 bg-white rounded-full transition-transform ${isRated ? 'translate-x-5' : ''}`} /></span>
+        </button>
 
         {/* Chess time controls */}
         {gameType === 'chess' && (
@@ -243,6 +252,9 @@ export default function AdminPage() {
         <Link to="/" className="hover:text-slate-300 flex items-center gap-1 transition-colors">
           <ArrowLeft className="w-4 h-4" /> Trang học sinh
         </Link>
+        {usingSupabaseGameBackend && profile?.role === 'admin' && (
+          <><span>·</span><Link to="/admin/accounts" className="hover:text-indigo-300 flex items-center gap-1"><Settings className="w-4 h-4" /> Quản trị hệ thống</Link></>
+        )}
         <span>·</span>
         <button onClick={handleLogout} className="hover:text-red-400 transition-colors">Đăng xuất</button>
       </div>

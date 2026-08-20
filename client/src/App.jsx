@@ -6,19 +6,24 @@ import HomePage from './pages/HomePage';
 import AdminPage from './pages/AdminPage';
 import SpectatorPage from './pages/SpectatorPage';
 import PracticePage from './pages/PracticePage';
+import AccountManagementPage from './pages/AccountManagementPage';
+import AccountSecurityGate from './components/AccountSecurityGate';
 
 export default function App() {
   return (
     <AuthProvider>
-      <GameProvider>
-        <Routes>
-          <Route path="/"         element={<HomePage />} />
-          <Route path="/admin"    element={<AdminPage />} />
-          <Route path="/spectate" element={<SpectatorPage />} />
-          <Route path="/practice" element={<PracticePage />} />
-          <Route path="*"         element={<Navigate to="/" replace />} />
-        </Routes>
-      </GameProvider>
+      <AccountSecurityGate>
+        <GameProvider>
+          <Routes>
+            <Route path="/"              element={<HomePage />} />
+            <Route path="/admin"         element={<AdminPage />} />
+            <Route path="/admin/accounts" element={<AccountManagementPage />} />
+            <Route path="/spectate"      element={<SpectatorPage />} />
+            <Route path="/practice"      element={<PracticePage />} />
+            <Route path="*"              element={<Navigate to="/" replace />} />
+          </Routes>
+        </GameProvider>
+      </AccountSecurityGate>
     </AuthProvider>
   );
 }
