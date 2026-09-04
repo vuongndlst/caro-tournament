@@ -35,16 +35,37 @@ function reducer(state, action) {
     case 'ADMIN_CREATED':
       return { ...state, role: 'admin', roomCode: action.payload.roomCode, error: null };
 
-    case 'PLAYER_JOINED':
+    case 'PLAYER_JOINED': {
+      // Vào lại sau khi tải lại trang: nếu server báo còn trận đang chạy thì
+      // khôi phục thẳng vào ván, đừng ném học sinh về sảnh rồi kẹt ở đó.
+      const resumed = action.payload.match || null;
       return {
         ...state,
         role: 'player',
         playerId: action.payload.playerId,
         nickname: action.payload.nickname,
         roomCode: action.payload.roomCode,
-        playerStatus: 'waiting',
+        currentMatch: resumed ? {
+          matchId:          resumed.matchId,
+          gameType:         resumed.gameType || (typeof resumed.board === 'string' ? 'chess' : resumed.size === 3 ? 'tictactoe' : 'caro'),
+          opponentNickname: resumed.opponentNickname,
+          opponentId:       resumed.opponentId,
+          yourSymbol:       resumed.yourSymbol,
+          opponentSymbol:   resumed.opponentSymbol,
+          currentTurn:      resumed.currentTurn,
+          board:            resumed.board,
+          size:             resumed.size,
+          turnStartedAt:    resumed.turnStartedAt || Date.now(),
+          turnDurationMs:   resumed.turnDurationMs || 30000,
+          p1TimeMs:         resumed.p1TimeMs ?? null,
+          p2TimeMs:         resumed.p2TimeMs ?? null,
+          chessIncMs:       resumed.chessIncMs ?? null,
+        } : null,
+        playerStatus: resumed ? 'playing' : 'waiting',
+        showCountdown: false,
         error: null,
       };
+    }
 
     case 'ROOM_STATE_UPDATE':
       return { ...state, tournamentState: action.payload };
@@ -170,6 +191,21 @@ function reducer(state, action) {
   }
 }
 
+// Phiên của học sinh chỉ nằm trong React state, nên tải lại trang là mất sạch
+// role/roomCode và các em bị đẩy về màn nhập mã phòng ("tự out ra"). Ghi lại mã
+// phòng để vào lại được ngay.
+const SESSION_KEY = 'caro_player_session';
+
+function savePlayerSession(roomCode, nickname) {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ roomCode, nickname })); } catch { /* private mode */ }
+}
+function loadPlayerSession() {
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { return null; }
+}
+function clearPlayerSession() {
+  try { localStorage.removeItem(SESSION_KEY); } catch { /* private mode */ }
+}
+
 export function GameProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   // Always-current snapshot of state for use inside static socket handlers
@@ -184,6 +220,17 @@ export function GameProvider({ children }) {
       if (role === 'admin' && roomCode) {
         const token = localStorage.getItem('caro_admin_token');
         if (token) socket.emit('admin_rejoin', { roomCode, token }, () => {});
+        return;
+      }
+      // Học sinh tải lại trang: tự vào lại đúng phòng cũ.
+      if (!role) {
+        const saved = loadPlayerSession();
+        if (saved?.roomCode) {
+          socket.emit('join_room', { roomCode: saved.roomCode, nickname: saved.nickname }, (res) => {
+            if (res?.success) dispatch({ type: 'PLAYER_JOINED', payload: { ...res, nickname: saved.nickname } });
+            else clearPlayerSession();
+          });
+        }
       }
     });
     socket.on('disconnect', () => dispatch({ type: 'SET_CONNECTED', payload: false }));
@@ -262,12 +309,20 @@ export function GameProvider({ children }) {
     if (typeof supabaseToken === 'function') { callback = supabaseToken; supabaseToken = null; }
     socket.emit('join_room', { roomCode, nickname, supabaseToken }, (res) => {
       if (res.success) {
+        savePlayerSession(roomCode, nickname);
         dispatch({ type: 'PLAYER_JOINED', payload: { ...res, nickname } });
       } else {
         dispatch({ type: 'SET_ERROR', payload: res.message });
       }
       callback?.(res);
     });
+  }, []);
+
+  // Cần thiết vì client tự vào lại phòng đã lưu: không có đường rời phòng thì
+  // học sinh bị nhốt trong phòng cũ, không sang phòng khác được.
+  const leaveRoom = useCallback(() => {
+    clearPlayerSession();
+    dispatch({ type: 'RESET' });
   }, []);
 
   const startTournament = useCallback((roomCode, callback) => {
@@ -313,6 +368,7 @@ export function GameProvider({ children }) {
       ...state,
       createTournament,
       joinRoom,
+      leaveRoom,
       startTournament,
       endTournament,
       makeMove,

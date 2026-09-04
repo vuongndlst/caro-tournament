@@ -68,11 +68,11 @@ export default function SpectatorView({ matchId, roomCode, onClose }) {
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4">
-      <div className="bg-slate-800 border border-slate-700/60 rounded-2xl w-full max-w-3xl shadow-2xl animate-fade-in overflow-hidden">
+    <div className="fixed inset-0 z-40 flex items-start sm:items-center justify-center bg-black/85 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
+      <div className="bg-slate-800 border border-slate-700/60 rounded-2xl w-full max-w-3xl shadow-2xl animate-fade-in overflow-hidden flex flex-col max-h-[92vh] my-auto">
 
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700/60 bg-slate-900/50">
+        <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-slate-700/60 bg-slate-900/50">
           <div className="flex items-center gap-2.5">
             <div className="w-7 h-7 bg-purple-600/30 rounded-lg flex items-center justify-center">
               <Eye className="w-4 h-4 text-purple-400" />
@@ -116,7 +116,7 @@ export default function SpectatorView({ matchId, roomCode, onClose }) {
 
         {/* Board */}
         {board && (
-          <div className="p-3">
+          <div className="p-3 overflow-y-auto flex-1 min-h-0">
             {matchData?.gameType === 'chess' ? (
               <ChessBoard
                 fen={board}
@@ -149,9 +149,15 @@ export default function SpectatorView({ matchId, roomCode, onClose }) {
         )}
 
         {/* Footer */}
-        <div className="px-4 py-2.5 border-t border-slate-700/40 flex items-center gap-2 text-xs text-slate-500 bg-slate-900/30">
+        <div className="shrink-0 px-4 py-2.5 border-t border-slate-700/40 flex items-center gap-2 text-xs text-slate-500 bg-slate-900/30">
           <Eye className="w-3 h-3" />
           Chế độ khán giả — không thể đánh cờ
+          <button
+            onClick={handleClose}
+            className="ml-auto px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold transition-colors"
+          >
+            Đóng
+          </button>
         </div>
       </div>
     </div>

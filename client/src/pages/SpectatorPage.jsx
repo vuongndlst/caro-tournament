@@ -4,7 +4,7 @@ import Board from '../components/Board';
 import ChessBoard from '../components/ChessBoard';
 import ChessClock from '../components/ChessClock';
 import { Eye, X, Wifi, WifiOff, RotateCcw } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 
 function detectGameType(match) {
   if (match?.gameType) return match.gameType;
@@ -15,6 +15,7 @@ function detectGameType(match) {
 
 export default function SpectatorPage() {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
   const matchId  = params.get('matchId');
   const roomCode = params.get('room');
 
@@ -96,6 +97,14 @@ export default function SpectatorPage() {
     };
   }, [connected, matchId, roomCode]);
 
+  // Tab này thường được mở bằng window.open(..., 'noopener'), mà trình duyệt
+  // chặn window.close() với tab không còn opener — nút X cũ vì thế bấm không có
+  // tác dụng. Thử đóng, không được thì quay về trang chủ trong cùng tab.
+  const handleExit = () => {
+    window.close();
+    setTimeout(() => { if (!window.closed) navigate('/'); }, 120);
+  };
+
   if (!matchId || !roomCode) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-400">
@@ -148,7 +157,7 @@ export default function SpectatorPage() {
               <RotateCcw className="w-4 h-4" />
             </button>
           )}
-          <button onClick={() => window.close()} className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors">
+          <button onClick={handleExit} title="Thoát xem trận" className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -239,6 +248,14 @@ export default function SpectatorPage() {
               : 'Trận đấu đã kết thúc'}
         </div>
       )}
+
+      {/* Nút thoát luôn hiển thị ở cuối trang, phòng khi header bị cuộn khuất */}
+      <button
+        onClick={handleExit}
+        className="mt-1 mb-4 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-300 hover:text-white transition-colors"
+      >
+        ← Thoát xem trận
+      </button>
 
       {/* Loading */}
       {!board && !error && (

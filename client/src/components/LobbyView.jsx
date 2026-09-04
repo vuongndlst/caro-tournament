@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
-import { Clock, Users, Trophy, Wifi, WifiOff, Gamepad2, Eye, Flag, History, ToggleLeft, ToggleRight, Search } from 'lucide-react';
+import { Clock, Users, Trophy, Wifi, WifiOff, Gamepad2, Eye, Flag, History, ToggleLeft, ToggleRight, Search, LogOut } from 'lucide-react';
 import SpectatorView from './SpectatorView';
 import Footer from './Footer';
 import { socket } from '../socket';
 
 export default function LobbyView() {
-  const { nickname, roomCode, tournamentState, connected, requestNextMatch } = useGame();
+  const { nickname, roomCode, tournamentState, connected, requestNextMatch, leaveRoom } = useGame();
   const leaderboard = tournamentState?.leaderboard || [];
   const status      = tournamentState?.status || 'waiting';
   const players     = tournamentState?.players || [];
@@ -88,7 +88,14 @@ export default function LobbyView() {
       )}
 
       {/* Profile card */}
-      <div className="card w-full max-w-md text-center animate-fade-in">
+      <div className="card w-full max-w-md text-center animate-fade-in relative">
+        <button
+          onClick={() => { if (window.confirm('Rời phòng và về trang chủ?')) leaveRoom(); }}
+          title="Rời phòng"
+          className="absolute top-3 right-3 flex items-center gap-1 text-xs text-slate-500 hover:text-red-300 transition-colors"
+        >
+          <LogOut className="w-3.5 h-3.5" /> Rời phòng
+        </button>
         <div className="w-16 h-16 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-indigo-900/50">
           <span className="text-2xl font-extrabold text-white">
             {nickname?.charAt(0).toUpperCase()}

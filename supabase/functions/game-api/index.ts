@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.112.2";
 import { Chess } from "npm:chess.js@1.4.0";
 import { calculateEloPair, rankInfo } from "../_shared/elo.ts";
+import { matchWaiting as runMatchWaiting } from "../_shared/matchmaking.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -299,72 +300,12 @@ async function finishMatch(match: any, tournament: any, winnerId: string | null,
   return { ...finished, elo_delta_p1: d1, elo_delta_p2: d2 };
 }
 
-function pairingScore(a: any, b: any) {
-  const waitSeconds = Math.min(
-    a.waiting_since ? (Date.now() - new Date(a.waiting_since).getTime()) / 1000 : 0,
-    b.waiting_since ? (Date.now() - new Date(b.waiting_since).getTime()) / 1000 : 0,
-  );
-  const rankPenalty = Math.abs(a.elo - b.elo) * Math.max(0.1, 1 - waitSeconds / 60);
-  const repeated = a.opponent_history?.includes(b.user_id) || b.opponent_history?.includes(a.user_id);
-  const immediate = a.last_opponent_id === b.user_id || b.last_opponent_id === a.user_id;
-  if (immediate && waitSeconds < 20) return Number.POSITIVE_INFINITY;
-  return rankPenalty + (repeated && waitSeconds < 30 ? 10_000 : 0);
-}
-
 async function matchWaiting(tournament: any) {
-  if (tournament.status !== "active") return;
-  const { data: waiting = [] } = await db.from("tournament_players").select("*")
-    .eq("tournament_id", tournament.id).eq("status", "waiting");
-  const pool = [...waiting];
-  while (pool.length >= 2) {
-    let best: [number, number] | null = null;
-    let bestScore = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < pool.length; i += 1) for (let j = i + 1; j < pool.length; j += 1) {
-      const score = pairingScore(pool[i], pool[j]);
-      if (score < bestScore) { best = [i, j]; bestScore = score; }
-    }
-    if (!best || !Number.isFinite(bestScore)) break;
-    const [i, j] = best;
-    const p1 = pool[i], p2 = pool[j];
-    pool.splice(j, 1); pool.splice(i, 1);
-
-    const claimed1 = await db.from("tournament_players").update({ status: "matching" })
-      .match({ tournament_id: tournament.id, user_id: p1.user_id, status: "waiting" }).select("user_id");
-    const claimed2 = await db.from("tournament_players").update({ status: "matching" })
-      .match({ tournament_id: tournament.id, user_id: p2.user_id, status: "waiting" }).select("user_id");
-    if (!claimed1.data?.length || !claimed2.data?.length) {
-      if (claimed1.data?.length) await db.from("tournament_players").update({ status: "waiting" }).match({ tournament_id: tournament.id, user_id: p1.user_id });
-      if (claimed2.data?.length) await db.from("tournament_players").update({ status: "waiting" }).match({ tournament_id: tournament.id, user_id: p2.user_id });
-      continue;
-    }
-
-    const isChess = tournament.game_type === "chess";
-    const size = isChess ? 8 : tournament.game_type === "tictactoe" ? 3 : 15;
-    const initial = isChess ? (tournament.chess_initial_ms || 300_000) : TURN_MS;
-    const started = new Date();
-    const deadline = new Date(started.getTime() + initial);
-    const { error } = await db.from("matches").insert({
-      tournament_id: tournament.id, p1_id: p1.user_id, p2_id: p2.user_id,
-      board: isChess ? new Chess().fen() : emptyBoard(size), board_size: size,
-      current_turn: p1.user_id, p1_time_ms: isChess ? initial : null,
-      p2_time_ms: isChess ? initial : null,
-      chess_increment_ms: isChess ? (tournament.chess_increment_ms || 0) : null,
-      turn_started_at: started.toISOString(), turn_deadline_at: deadline.toISOString(),
-    });
-    if (error) {
-      await Promise.all([
-        db.from("tournament_players").update({ status: "waiting" }).match({ tournament_id: tournament.id, user_id: p1.user_id }),
-        db.from("tournament_players").update({ status: "waiting" }).match({ tournament_id: tournament.id, user_id: p2.user_id }),
-      ]);
-      throw error;
-    }
-    await Promise.all([
-      db.from("tournament_players").update({ status: "playing", waiting_since: null,
-        opponent_history: [...new Set([...(p1.opponent_history || []), p2.user_id])] }).match({ tournament_id: tournament.id, user_id: p1.user_id }),
-      db.from("tournament_players").update({ status: "playing", waiting_since: null,
-        opponent_history: [...new Set([...(p2.opponent_history || []), p1.user_id])] }).match({ tournament_id: tournament.id, user_id: p2.user_id }),
-    ]);
-  }
+  return await runMatchWaiting(db, tournament, {
+    emptyBoard,
+    initialChessFen: () => new Chess().fen(),
+    turnMs: TURN_MS,
+  });
 }
 
 async function processExpiredMatches() {
@@ -645,8 +586,15 @@ Deno.serve(async (req: Request) => {
         if (error) throw error;
       }
       if (tournament.status === "active") await matchWaiting(tournament);
+
+      // Vào lại sau khi tải lại trang: trả về trận đang chạy để client khôi
+      // phục đúng màn hình, thay vì ném học sinh về sảnh và kẹt ở đó.
+      const { data: ongoing = [] } = await db.from("matches").select("*")
+        .eq("tournament_id", tournament.id).eq("status", "active")
+        .or(`p1_id.eq.${user.id},p2_id.eq.${user.id}`).limit(1);
       return response(req, { success: true, playerId: user.id, roomCode: tournament.room_code,
-        tournamentId: tournament.id, state: await tournamentState(tournament) });
+        tournamentId: tournament.id, state: await tournamentState(tournament),
+        match: ongoing[0] ? await matchPayload(ongoing[0], tournament, user.id) : null });
     }
 
     if (!membership && !canManageTournament) return response(req, { success: false, message: "Bạn không thuộc giải đấu này." }, 403);
@@ -673,8 +621,10 @@ Deno.serve(async (req: Request) => {
 
     if (action === "request_next_match") {
       if (!membership) return response(req, { success: false, message: "Bạn chưa tham gia." }, 403);
+      // "matching" phải nằm trong danh sách, nếu không người chơi kẹt ở đó
+      // không thể tự thoát ra bằng cách bấm tìm trận mới.
       await db.from("tournament_players").update({ status: "waiting", waiting_since: new Date().toISOString() })
-        .match({ tournament_id: tournament.id, user_id: user.id }).in("status", ["result", "waiting"]);
+        .match({ tournament_id: tournament.id, user_id: user.id }).in("status", ["result", "waiting", "matching"]);
       await matchWaiting(tournament);
       return response(req, { success: true });
     }
