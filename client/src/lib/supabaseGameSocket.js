@@ -59,7 +59,7 @@ export class SupabaseGameSocket {
     this._dispatch('disconnect');
   }
 
-  async _invoke(action, payload = {}) {
+  async _invoke(action, payload = {}, attempt = 0) {
     if (!supabase) return { success: false, message: 'Supabase chưa được cấu hình.' };
     const { data: { session } } = await supabase.auth.getSession();
     this.id = session?.user?.id || null;
@@ -67,6 +67,15 @@ export class SupabaseGameSocket {
     const { data, error } = await supabase.functions.invoke('game-api', {
       body: { action, ...payload },
     });
+
+    // Cả lớp cùng thao tác một lúc thì server có thể trả 5xx hoặc rớt mạng nhất
+    // thời. Không thử lại thì học sinh mất nước đi hoặc thấy báo lỗi vô cớ.
+    // Server đã chặn nước đi trùng bằng version và lượt nên thử lại là an toàn.
+    const status = error?.context?.status;
+    if (error && (status === undefined || status >= 500) && attempt < 2) {
+      await new Promise(r => setTimeout(r, 300 * (attempt + 1) ** 2));
+      return this._invoke(action, payload, attempt + 1);
+    }
     if (error) {
       // supabase-js coi mọi mã 4xx/5xx là lỗi và chỉ đưa ra "Edge Function
       // returned a non-2xx status code", nuốt mất thông báo tiếng Việt trong

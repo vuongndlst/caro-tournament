@@ -25,12 +25,16 @@ jobs:
         with:
           deno-version: v2.x
       - name: Typecheck edge function
-        run: deno check --node-modules-dir=none supabase/functions/game-api/index.ts
+        run: |
+          deno check --node-modules-dir=none supabase/functions/game-api/index.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/swiss.ts
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Test logic ghép trận
         run: node --experimental-strip-types server/test_matchmaking.mjs
+      - name: Test ghép cặp Thụy Sĩ
+        run: node --experimental-strip-types server/test_swiss.mjs
 
   deploy-supabase:
     needs: [check]

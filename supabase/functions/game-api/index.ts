@@ -3,6 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.112.2";
 import { Chess } from "npm:chess.js@1.4.0";
 import { calculateEloPair, rankInfo } from "../_shared/elo.ts";
 import { matchWaiting as runMatchWaiting } from "../_shared/matchmaking.ts";
+import { planSwissRound, suggestedRounds, finalStandings } from "../_shared/swiss.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -163,6 +164,9 @@ async function tournamentState(tournament: any) {
     gameType: tournament.game_type, status: tournament.status,
     seasonId: tournament.season_id, isRated: tournament.is_rated,
     chessMode: tournament.chess_mode,
+    format: tournament.format || "auto",
+    currentRound: tournament.current_round || 0,
+    totalRounds: tournament.total_rounds || null,
     players: players.filter((p: any) => p.status !== "offline").map((p: any) => ({
       id: p.user_id, nickname: p.nickname, status: p.status === "result" ? "waiting" : p.status,
     })),
@@ -314,6 +318,85 @@ async function matchWaiting(tournament: any) {
   });
 }
 
+// ── Thể thức Thụy Sĩ ────────────────────────────────────────────────────────
+// Mỗi vòng ghép tất cả học sinh cùng lúc. Hết vòng mới sang vòng kế; hết vòng
+// cuối thì chốt giải và người dẫn đầu là vô địch.
+async function startSwissRound(tournament: any, round: number) {
+  const players = (await db.from("tournament_players").select("*")
+    .eq("tournament_id", tournament.id).neq("status", "offline")).data ?? [];
+  if (players.length < 2) return 0;
+
+  const { pairs, bye } = planSwissRound(players);
+  const now = new Date();
+  const stamp = now.toISOString();
+  const isChess = tournament.game_type === "chess";
+  const size = isChess ? 8 : tournament.game_type === "tictactoe" ? 3 : 15;
+  const initial = isChess ? (tournament.chess_initial_ms || 300_000) : TURN_MS;
+
+  const rows = pairs.map(([p1, p2]) => ({
+    tournament_id: tournament.id, p1_id: p1.user_id, p2_id: p2.user_id, round,
+    board: isChess ? new Chess().fen() : emptyBoard(size), board_size: size,
+    current_turn: p1.user_id,
+    p1_time_ms: isChess ? initial : null, p2_time_ms: isChess ? initial : null,
+    chess_increment_ms: isChess ? (tournament.chess_increment_ms || 0) : null,
+    turn_started_at: stamp,
+    turn_deadline_at: new Date(now.getTime() + initial).toISOString(),
+  }));
+  if (rows.length) {
+    const { error } = await db.from("matches").insert(rows);
+    if (error) throw error;
+  }
+
+  await Promise.all(pairs.flatMap(([p1, p2]) => [
+    db.from("tournament_players").update({
+      status: "playing", waiting_since: null, last_opponent_id: p2.user_id,
+      opponent_history: [...new Set([...(p1.opponent_history || []), p2.user_id])],
+    }).match({ tournament_id: tournament.id, user_id: p1.user_id }),
+    db.from("tournament_players").update({
+      status: "playing", waiting_since: null, last_opponent_id: p1.user_id,
+      opponent_history: [...new Set([...(p2.opponent_history || []), p1.user_id])],
+    }).match({ tournament_id: tournament.id, user_id: p2.user_id }),
+  ]));
+
+  // Sĩ số lẻ: em được miễn đấu vẫn được cộng điểm như thắng, nhưng không tính
+  // ELO và không ghi vào thành tích thắng/thua.
+  if (bye) {
+    await db.from("tournament_players").update({
+      status: "result", score: bye.score + 3, byes: (bye.byes || 0) + 1, waiting_since: null,
+    }).match({ tournament_id: tournament.id, user_id: bye.user_id });
+  }
+
+  await db.from("tournaments").update({ current_round: round }).eq("id", tournament.id);
+  return pairs.length;
+}
+
+async function finishSwissTournament(tournament: any) {
+  await db.from("tournaments").update({
+    status: "finished", finished_at: new Date().toISOString(),
+  }).eq("id", tournament.id).eq("status", "active");
+}
+
+// Gọi sau mỗi lần một trận kết thúc. Chỉ sang vòng mới khi TẤT CẢ trận của
+// vòng hiện tại đã xong, để cả lớp bước sang vòng cùng lúc.
+async function maybeAdvanceSwissRound(tournament: any) {
+  if (tournament.format !== "swiss" || tournament.status !== "active") return;
+  const round = tournament.current_round || 0;
+  if (round < 1) return;
+
+  const { count } = await db.from("matches").select("*", { count: "exact", head: true })
+    .eq("tournament_id", tournament.id).eq("round", round).eq("status", "active");
+  if ((count || 0) > 0) return;
+
+  if (round >= (tournament.total_rounds || 0)) {
+    await finishSwissTournament(tournament);
+    return;
+  }
+  // Ai vừa đánh xong đều quay về hàng chờ trước khi bốc cặp vòng mới.
+  await db.from("tournament_players").update({ status: "waiting", waiting_since: new Date().toISOString() })
+    .eq("tournament_id", tournament.id).in("status", ["result", "matching"]);
+  await startSwissRound({ ...tournament, current_round: round }, round + 1);
+}
+
 async function processExpiredMatches() {
   const now = new Date().toISOString();
   const { data: expiredRows, error } = await db.from("matches").select("*")
@@ -326,7 +409,11 @@ async function processExpiredMatches() {
     if (!tournament) continue;
     const winnerId = match.current_turn === match.p1_id ? match.p2_id : match.p1_id;
     const finished = await finishMatch(match, tournament, winnerId, false, "timeout");
-    if (finished?.status === "finished") processed += 1;
+    if (finished?.status === "finished") {
+      processed += 1;
+      // Nếu không gọi ở đây, một em bỏ máy giữa vòng sẽ treo cả lớp ở vòng đó.
+      await maybeAdvanceSwissRound(tournament);
+    }
   }
   return processed;
 }
@@ -560,9 +647,13 @@ Deno.serve(async (req: Request) => {
       for (let i = 0; i < 5; i += 1) {
         const exists = await tournamentByCode(code); if (!exists) break; code = roomCode();
       }
+      const format = body.format === "swiss" ? "swiss" : "auto";
+      const totalRounds = format === "swiss"
+        ? Math.min(9, Math.max(3, Number(body.totalRounds) || 5))
+        : null;
       const { data, error } = await db.from("tournaments").insert({
         room_code: code, name: String(body.name || `Giải đấu ${new Date().toLocaleDateString("vi-VN")}`).slice(0, 60),
-        game_type: gameType, teacher_id: user.id,
+        game_type: gameType, teacher_id: user.id, format, total_rounds: totalRounds,
         season_id: season.id, is_rated: body.isRated !== false, chess_mode: chessMode,
         chess_initial_ms: gameType === "chess" ? Math.max(60_000, Number(body.chessInitialMs) || 300_000) : null,
         chess_increment_ms: gameType === "chess" ? Math.max(0, Number(body.chessIncMs) || 0) : null,
@@ -623,12 +714,21 @@ Deno.serve(async (req: Request) => {
       const now = new Date().toISOString();
       await db.from("tournaments").update({ status: "active", started_at: now }).eq("id", tournament.id);
       await db.from("tournament_players").update({ waiting_since: now }).eq("tournament_id", tournament.id).eq("status", "waiting");
-      await matchWaiting({ ...tournament, status: "active" });
+      if (tournament.format === "swiss") {
+        await startSwissRound({ ...tournament, status: "active" }, 1);
+      } else {
+        await matchWaiting({ ...tournament, status: "active" });
+      }
       return response(req, { success: true });
     }
 
     if (action === "request_next_match") {
       if (!membership) return response(req, { success: false, message: "Bạn chưa tham gia." }, 403);
+      // Thụy Sĩ ghép theo vòng nên học sinh không tự tìm trận được; chờ cả
+      // lớp đánh xong vòng hiện tại là hệ thống bốc cặp vòng mới.
+      if (tournament.format === "swiss") {
+        return response(req, { success: true, waitingForRound: true });
+      }
       // "matching" phải nằm trong danh sách, nếu không người chơi kẹt ở đó
       // không thể tự thoát ra bằng cách bấm tìm trận mới.
       await db.from("tournament_players").update({ status: "waiting", waiting_since: new Date().toISOString() })
@@ -645,6 +745,8 @@ Deno.serve(async (req: Request) => {
       if (match.turn_deadline_at && now >= new Date(match.turn_deadline_at).getTime()) {
         const winnerId = match.p1_id === user.id ? match.p2_id : match.p1_id;
         await finishMatch(match, tournament, winnerId, false, "timeout");
+        // Thiếu dòng này thì một em đánh chậm quá giờ sẽ treo cả lớp ở vòng đó.
+        await maybeAdvanceSwissRound(tournament);
         return response(req, { success: false, timedOut: true, message: "Bạn đã hết giờ." }, 409);
       }
       let board = match.board;
@@ -693,7 +795,10 @@ Deno.serve(async (req: Request) => {
       }).eq("id", match.id).eq("version", match.version).eq("status", "active").select().maybeSingle();
       if (error) throw error;
       if (!updated) return response(req, { success: false, message: "Trạng thái vừa thay đổi, vui lòng thử lại." }, 409);
-      if (winnerId || draw) await finishMatch(updated, tournament, winnerId, draw, winnerId ? "win" : "draw", winningCells);
+      if (winnerId || draw) {
+        await finishMatch(updated, tournament, winnerId, draw, winnerId ? "win" : "draw", winningCells);
+        await maybeAdvanceSwissRound(tournament);
+      }
       return response(req, { success: true, isCheck });
     }
 
@@ -704,6 +809,7 @@ Deno.serve(async (req: Request) => {
         return response(req, { success: false, message: "Người chơi chưa hết giờ." }, 409);
       const winnerId = match.current_turn === match.p1_id ? match.p2_id : match.p1_id;
       await finishMatch(match, tournament, winnerId, false, "timeout");
+      await maybeAdvanceSwissRound(tournament);
       return response(req, { success: true, winnerId, timedOutPlayerId: match.current_turn });
     }
 

@@ -14,6 +14,8 @@ const URL = process.env.SUPABASE_URL || 'http://127.0.0.1:54321';
 const ANON = process.env.SUPABASE_ANON_KEY;
 const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const COUNT = Number(process.argv[2] || 4);
+const FORMAT = process.env.FORMAT || 'auto';
+const ROUNDS = Number(process.env.ROUNDS || 3);
 if (!ANON || !SERVICE) { console.error('Thiếu khoá Supabase'); process.exit(2); }
 
 const admin = createClient(URL, SERVICE, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -47,7 +49,10 @@ await admin.from('seasons').insert({
 
 const stamp = Date.now().toString().slice(-6);
 const teacher = await makeUser(`gv${stamp}@lsts.edu.vn`, 'teacher', 'Thay Vuong');
-const created = await call(teacher, 'create_tournament', { name: 'Giải test giao diện', gameType: 'caro' });
+const created = await call(teacher, 'create_tournament', {
+  name: 'Giải test giao diện', gameType: 'caro',
+  ...(FORMAT === 'swiss' ? { format: 'swiss', totalRounds: ROUNDS } : {}),
+});
 
 const students = [];
 for (let i = 0; i < COUNT; i += 1) {
@@ -62,6 +67,7 @@ const human = await makeUser(`em${stamp}@lsts.edu.vn`, 'student', 'Em Test');
 await call(teacher, 'start_tournament', { roomCode: created.roomCode, tournamentId: created.tournamentId });
 
 console.log(JSON.stringify({
+  theThuc: FORMAT, soVong: FORMAT === 'swiss' ? ROUNDS : null,
   roomCode: created.roomCode,
   tournamentId: created.tournamentId,
   matKhau: PASSWORD,

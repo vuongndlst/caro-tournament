@@ -17,6 +17,8 @@ export default function AdminPage() {
   const [error,         setError]         = useState('');
   const [tournamentName, setTournamentName] = useState('');
   const [gameType, setGameType] = useState('caro');
+  const [format, setFormat] = useState('auto');
+  const [totalRounds, setTotalRounds] = useState(5);
   const [isRated, setIsRated] = useState(true);
   // Chess time controls
   const [chessPreset, setChessPreset] = useState('5+3');
@@ -34,17 +36,20 @@ export default function AdminPage() {
     'custom': { label: '⚙️ Tuỳ chỉnh', initialMs: null, incMs: null, mode: 'custom' },
   };
 
+  // Thụy Sĩ: đấu theo vòng, hết vòng cuối lấy người dẫn đầu làm vô địch.
+  const formatOpts = () => (format === 'swiss' ? { format, totalRounds } : { format: 'auto' });
+
   const getChessOpts = () => {
-    if (gameType !== 'chess') return { isRated };
+    if (gameType !== 'chess') return { isRated, ...formatOpts() };
     if (chessPreset === 'custom') {
       return {
         chessInitialMs: Math.max(1, chessCustomMin) * 60 * 1000,
         chessIncMs: Math.max(0, chessCustomInc) * 1000,
-        chessMode: 'custom', isRated,
+        chessMode: 'custom', isRated, ...formatOpts(),
       };
     }
     const p = CHESS_PRESETS[chessPreset];
-    return { chessInitialMs: p.initialMs, chessIncMs: p.incMs, chessMode: p.mode, isRated };
+    return { chessInitialMs: p.initialMs, chessIncMs: p.incMs, chessMode: p.mode, isRated, ...formatOpts() };
   };
 
   // If token exists, verify it on mount
@@ -168,6 +173,42 @@ export default function AdminPage() {
             <option value="tictactoe">Tic Tac Toe (3x3)</option>
             <option value="chess">Cờ Vua (8x8)</option>
           </select>
+        </div>
+
+        {/* Thể thức */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Thể thức</label>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { key: 'auto',  ten: 'Ghép liên tục', mo: 'Đánh xong là ghép trận mới, không giới hạn' },
+              { key: 'swiss', ten: 'Thi đấu có vòng', mo: 'Đấu theo vòng, cuối giải có nhà vô địch' },
+            ].map(o => (
+              <button key={o.key} type="button" onClick={() => setFormat(o.key)}
+                className={`text-left px-3 py-2.5 rounded-xl border transition-colors ${
+                  format === o.key ? 'bg-indigo-600/25 border-indigo-500' : 'bg-slate-800/60 border-slate-700 hover:bg-slate-800'}`}>
+                <p className="text-sm font-semibold">{o.ten}</p>
+                <p className="text-xs text-slate-500 mt-0.5 leading-snug">{o.mo}</p>
+              </button>
+            ))}
+          </div>
+          {format === 'swiss' && (
+            <div className="mt-3 bg-slate-800/60 rounded-xl p-3 border border-slate-700/50">
+              <label className="block text-sm font-medium text-slate-300 mb-2">Số vòng đấu</label>
+              <div className="flex gap-2 flex-wrap">
+                {[3, 4, 5, 6, 7].map(n => (
+                  <button key={n} type="button" onClick={() => setTotalRounds(n)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
+                      totalRounds === n ? 'bg-indigo-600 border-indigo-500' : 'bg-slate-700/50 border-slate-600/50 text-slate-300'}`}>
+                    {n} vòng
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500 mt-2 leading-snug">
+                Mỗi vòng cả lớp đấu cùng lúc, ghép em cùng điểm với nhau và tránh gặp lại.
+                Lớp 32 em nên chọn 5 vòng; ước tính khoảng {totalRounds * 6} phút.
+              </p>
+            </div>
+          )}
         </div>
 
         <button type="button" onClick={() => setIsRated(value => !value)}

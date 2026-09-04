@@ -10,6 +10,9 @@ export default function LobbyView() {
   const leaderboard = tournamentState?.leaderboard || [];
   const status      = tournamentState?.status || 'waiting';
   const players     = tournamentState?.players || [];
+  const laThuySi    = tournamentState?.format === 'swiss';
+  const vongHienTai = tournamentState?.currentRound || 0;
+  const tongSoVong  = tournamentState?.totalRounds || 0;
 
   const autoQueue = true;
   const [myHistory, setMyHistory] = useState(null); // null = not loaded, [] = loaded empty
@@ -35,6 +38,12 @@ export default function LobbyView() {
             <Flag className="w-8 h-8 text-yellow-400" />
           </div>
           <h2 className="text-2xl font-extrabold text-yellow-300 mb-1">Giải đấu kết thúc!</h2>
+          {top3[0] && (
+            <p className="text-sm text-yellow-200/90 mb-1">
+              🏆 Vô địch: <span className="font-bold text-white">{top3[0].nickname}</span>
+              <span className="text-slate-400"> · {top3[0].score}đ</span>
+            </p>
+          )}
           {myRankFinal > 0 && (
             <p className="text-slate-400 text-sm mb-4">
               Bạn xếp hạng <span className="text-white font-bold">#{myRankFinal}</span>
@@ -107,6 +116,11 @@ export default function LobbyView() {
           <span className="badge bg-indigo-900/50 text-indigo-300 border border-indigo-700/40 text-xs">
             Phòng: <span className="font-black tracking-widest ml-1">{roomCode}</span>
           </span>
+          {laThuySi && tongSoVong > 0 && (
+            <span className="badge bg-purple-900/40 text-purple-200 border border-purple-700/40 text-xs">
+              Vòng {Math.max(1, vongHienTai)}/{tongSoVong}
+            </span>
+          )}
           {myRank > 0 && (
             <span className="badge bg-yellow-900/40 text-yellow-300 border border-yellow-700/30 text-xs">
               #{myRank} BXH
@@ -153,7 +167,9 @@ export default function LobbyView() {
             <>
               <Gamepad2 className="w-4 h-4 text-green-400 shrink-0" />
               <p className="text-green-300 font-medium text-sm">
-                Đang chờ ghép trận tự động...
+                {laThuySi
+                  ? `Xong vòng ${vongHienTai} — chờ cả lớp đánh xong để sang vòng ${vongHienTai + 1}`
+                  : 'Đang chờ ghép trận tự động...'}
               </p>
             </>
           )}
