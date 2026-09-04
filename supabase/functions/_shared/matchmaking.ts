@@ -72,11 +72,11 @@ export async function reclaimStaleMatching(db: any, tournamentId: string, now = 
 // trang giữa trận, trận bị kết thúc bởi cron...) cũng bị kẹt vĩnh viễn. Đưa họ
 // về "waiting".
 export async function reclaimOrphanPlaying(db: any, tournamentId: string, now = Date.now()) {
-  const { data: playing = [] } = await db.from("tournament_players")
-    .select("user_id").eq("tournament_id", tournamentId).eq("status", "playing");
+  const playing = (await db.from("tournament_players")
+    .select("user_id").eq("tournament_id", tournamentId).eq("status", "playing")).data ?? [];
   if (!playing.length) return [];
-  const { data: active = [] } = await db.from("matches")
-    .select("p1_id,p2_id").eq("tournament_id", tournamentId).eq("status", "active");
+  const active = (await db.from("matches")
+    .select("p1_id,p2_id").eq("tournament_id", tournamentId).eq("status", "active")).data ?? [];
   const busy = new Set<string>();
   for (const match of active) { busy.add(match.p1_id); busy.add(match.p2_id); }
   const orphans = playing.map((row: any) => row.user_id).filter((id: string) => !busy.has(id));
@@ -105,8 +105,8 @@ export async function matchWaiting(db: any, tournament: any, deps: MatchWaitingD
     ...await reclaimOrphanPlaying(db, tournament.id, nowMs),
   ];
 
-  const { data: waiting = [] } = await db.from("tournament_players").select("*")
-    .eq("tournament_id", tournament.id).eq("status", "waiting");
+  const waiting = (await db.from("tournament_players").select("*")
+    .eq("tournament_id", tournament.id).eq("status", "waiting")).data ?? [];
 
   let paired = 0;
   for (const [p1, p2] of planPairings(waiting, nowMs)) {

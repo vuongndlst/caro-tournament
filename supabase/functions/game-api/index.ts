@@ -143,10 +143,14 @@ async function tournamentById(id: string) {
 }
 
 async function tournamentState(tournament: any) {
-  const [{ data: players = [] }, { data: matches = [] }] = await Promise.all([
+  const [{ data: playerRows }, { data: matchRows }] = await Promise.all([
     db.from("tournament_players").select("*").eq("tournament_id", tournament.id),
     db.from("matches").select("*").eq("tournament_id", tournament.id).order("created_at"),
   ]);
+  // Supabase trả data: null khi truy vấn lỗi, nên phải ?? [] chứ không dùng
+  // được giá trị mặc định khi destructuring (chỉ áp dụng cho undefined).
+  const players = playerRows ?? [];
+  const matches = matchRows ?? [];
   const byId = new Map(players.map((player: any) => [player.user_id, player]));
   const leaderboard = [...players].map((player: any) => ({
     id: player.user_id, nickname: player.nickname, elo: player.elo, score: player.score,
@@ -173,9 +177,9 @@ async function tournamentState(tournament: any) {
 }
 
 async function matchPayload(match: any, tournament: any, userId?: string) {
-  const { data: players = [] } = await db.from("tournament_players")
+  const players = (await db.from("tournament_players")
     .select("user_id,nickname").eq("tournament_id", tournament.id)
-    .in("user_id", [match.p1_id, match.p2_id]);
+    .in("user_id", [match.p1_id, match.p2_id])).data ?? [];
   const names = new Map(players.map((p: any) => [p.user_id, p.nickname]));
   const isP1 = userId === match.p1_id;
   return {
@@ -205,9 +209,9 @@ async function matchPayload(match: any, tournament: any, userId?: string) {
 
 async function historyPayload(userId: string, rows: any[]) {
   const opponentIds = [...new Set(rows.map(row => row.p1_id === userId ? row.p2_id : row.p1_id).filter(Boolean))];
-  const { data: opponents = [] } = opponentIds.length
+  const opponents = (opponentIds.length
     ? await db.from("profiles").select("id,nickname").in("id", opponentIds)
-    : { data: [] };
+    : { data: [] }).data ?? [];
   const names = new Map(opponents.map((item: any) => [item.id, item.nickname]));
   return rows.map(row => {
     const opponentId = row.p1_id === userId ? row.p2_id : row.p1_id;
@@ -221,8 +225,8 @@ async function historyPayload(userId: string, rows: any[]) {
 
 async function finishMatch(match: any, tournament: any, winnerId: string | null, isDraw: boolean, reason: string, winningCells: any = null) {
   if (match.status !== "active") return match;
-  const { data: players = [] } = await db.from("tournament_players").select("*")
-    .eq("tournament_id", tournament.id).in("user_id", [match.p1_id, match.p2_id]);
+  const players = (await db.from("tournament_players").select("*")
+    .eq("tournament_id", tournament.id).in("user_id", [match.p1_id, match.p2_id])).data ?? [];
   const p1 = players.find((p: any) => p.user_id === match.p1_id);
   const p2 = players.find((p: any) => p.user_id === match.p2_id);
   if (!p1 || !p2) throw new Error("Không tìm thấy người chơi của trận");
@@ -267,12 +271,14 @@ async function finishMatch(match: any, tournament: any, winnerId: string | null,
   ];
 
   if (isRated) {
-    const [{ data: gameRatings = [] }, { data: seasonRatings = [] }] = await Promise.all([
+    const [{ data: gameRatingRows }, { data: seasonRatingRows }] = await Promise.all([
       db.from("profile_game_ratings").select("*").eq("game_type", tournament.game_type)
         .in("user_id", [p1.user_id, p2.user_id]),
       db.from("season_game_ratings").select("*").eq("season_id", tournament.season_id)
         .eq("game_type", tournament.game_type).in("user_id", [p1.user_id, p2.user_id]),
     ]);
+    const gameRatings = gameRatingRows ?? [];
+    const seasonRatings = seasonRatingRows ?? [];
     const fallback = (player: any) => ({ elo: player.elo, wins: 0, draws: 0, losses: 0, streak: 0, rated_games: 0 });
     const global1 = gameRatings.find((item: any) => item.user_id === p1.user_id) || fallback(p1);
     const global2 = gameRatings.find((item: any) => item.user_id === p2.user_id) || fallback(p2);
@@ -310,9 +316,10 @@ async function matchWaiting(tournament: any) {
 
 async function processExpiredMatches() {
   const now = new Date().toISOString();
-  const { data: expired = [], error } = await db.from("matches").select("*")
+  const { data: expiredRows, error } = await db.from("matches").select("*")
     .eq("status", "active").lte("turn_deadline_at", now).limit(100);
   if (error) throw error;
+  const expired = expiredRows ?? [];
   let processed = 0;
   for (const match of expired) {
     const tournament = await tournamentById(match.tournament_id);
@@ -377,9 +384,9 @@ Deno.serve(async (req: Request) => {
       if (error) throw error;
       const users = usersData.users || [];
       const ids = users.map((item: any) => item.id);
-      const { data: profiles = [] } = ids.length
+      const profiles = (ids.length
         ? await db.from("profiles").select("id,nickname,role,must_change_password,is_locked,mfa_required,created_at,requested_role,requested_role_at").in("id", ids)
-        : { data: [] };
+        : { data: [] }).data ?? [];
       const byId = new Map(profiles.map((item: any) => [item.id, item]));
       const accounts = await Promise.all(users.map(async (item: any) => {
         const { data: factorData } = await db.auth.admin.mfa.listFactors({ userId: item.id });
@@ -514,12 +521,13 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "get_seasons") {
-      const { data: seasons = [], error } = await db.from("seasons").select("*").order("starts_at", { ascending: false });
+      const { data: seasonRows, error } = await db.from("seasons").select("*").order("starts_at", { ascending: false });
       if (error) throw error;
+      const seasons = seasonRows ?? [];
       const seasonId = body.seasonId || seasons[0]?.id;
       let query = db.from("season_leaderboard").select("*").eq("season_id", seasonId || "00000000-0000-0000-0000-000000000000");
       if (["caro", "tictactoe", "chess"].includes(body.gameType)) query = query.eq("game_type", body.gameType);
-      const { data: leaderboard = [] } = await query.limit(200);
+      const leaderboard = (await query.limit(200)).data ?? [];
       return response(req, { success: true, seasons, leaderboard });
     }
 
@@ -589,9 +597,9 @@ Deno.serve(async (req: Request) => {
 
       // Vào lại sau khi tải lại trang: trả về trận đang chạy để client khôi
       // phục đúng màn hình, thay vì ném học sinh về sảnh và kẹt ở đó.
-      const { data: ongoing = [] } = await db.from("matches").select("*")
+      const ongoing = (await db.from("matches").select("*")
         .eq("tournament_id", tournament.id).eq("status", "active")
-        .or(`p1_id.eq.${user.id},p2_id.eq.${user.id}`).limit(1);
+        .or(`p1_id.eq.${user.id},p2_id.eq.${user.id}`).limit(1)).data ?? [];
       return response(req, { success: true, playerId: user.id, roomCode: tournament.room_code,
         tournamentId: tournament.id, state: await tournamentState(tournament),
         match: ongoing[0] ? await matchPayload(ongoing[0], tournament, user.id) : null });
@@ -601,8 +609,8 @@ Deno.serve(async (req: Request) => {
 
     if (action === "get_state" || action === "admin_rejoin") {
       const state = await tournamentState(tournament);
-      const { data: myMatches = [] } = await db.from("matches").select("*").eq("tournament_id", tournament.id)
-        .or(`p1_id.eq.${user.id},p2_id.eq.${user.id}`).order("created_at", { ascending: false }).limit(1);
+      const myMatches = (await db.from("matches").select("*").eq("tournament_id", tournament.id)
+        .or(`p1_id.eq.${user.id},p2_id.eq.${user.id}`).order("created_at", { ascending: false }).limit(1)).data ?? [];
       return response(req, { success: true, state, tournamentId: tournament.id,
         match: myMatches[0] ? await matchPayload(myMatches[0], tournament, user.id) : null });
     }
@@ -703,7 +711,7 @@ Deno.serve(async (req: Request) => {
       const denied = privilegedError(me, auth);
       if (!canManageTournament || denied) return response(req, { success: false, message: denied || "Không có quyền." }, 403);
       await db.from("tournaments").update({ status: "finished", finished_at: new Date().toISOString() }).eq("id", tournament.id);
-      const { data: active = [] } = await db.from("matches").select("*").eq("tournament_id", tournament.id).eq("status", "active");
+      const active = (await db.from("matches").select("*").eq("tournament_id", tournament.id).eq("status", "active")).data ?? [];
       for (const match of active) await finishMatch(match, { ...tournament, status: "finished" }, null, true, "tournament_ended");
       return response(req, { success: true, leaderboard: (await tournamentState({ ...tournament, status: "finished" })).leaderboard });
     }
@@ -724,8 +732,8 @@ Deno.serve(async (req: Request) => {
       const { data: player } = await db.from("tournament_players").select("*")
         .match({ tournament_id: tournament.id, user_id: body.playerId }).maybeSingle();
       if (!player) return response(req, { success: false, message: "Không tìm thấy học sinh." }, 404);
-      const { data: history = [] } = await db.from("match_history").select("*")
-        .or(`p1_id.eq.${body.playerId},p2_id.eq.${body.playerId}`).order("played_at", { ascending: false }).limit(20);
+      const history = (await db.from("match_history").select("*")
+        .or(`p1_id.eq.${body.playerId},p2_id.eq.${body.playerId}`).order("played_at", { ascending: false }).limit(20)).data ?? [];
       return response(req, { success: true, stats: { id: player.user_id, nickname: player.nickname,
         elo: player.elo, score: player.score, wins: player.wins, draws: player.draws,
         losses: player.losses, streak: player.streak, ratedGames: player.rated_games || 0,
@@ -734,8 +742,8 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "get_my_history") {
-      const { data: history = [] } = await db.from("match_history").select("*")
-        .or(`p1_id.eq.${user.id},p2_id.eq.${user.id}`).order("played_at", { ascending: false }).limit(20);
+      const history = (await db.from("match_history").select("*")
+        .or(`p1_id.eq.${user.id},p2_id.eq.${user.id}`).order("played_at", { ascending: false }).limit(20)).data ?? [];
       return response(req, { success: true, history: await historyPayload(user.id, history) });
     }
 

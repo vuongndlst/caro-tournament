@@ -15,7 +15,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Chặn deploy khi edge function sai kiểu hoặc logic ghép trận hỏng.
+  # Deploy bằng --use-api KHÔNG typecheck, nên bước này là lưới an toàn duy nhất.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Typecheck edge function
+        run: deno check --node-modules-dir=none supabase/functions/game-api/index.ts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test logic ghép trận
+        run: node --experimental-strip-types server/test_matchmaking.mjs
+
   deploy-supabase:
+    needs: [check]
     if: ${{ vars.SUPABASE_PROJECT_ID != '' }}
     runs-on: ubuntu-latest
     env:
@@ -32,6 +50,7 @@ jobs:
         run: supabase functions deploy game-api --project-ref "$SUPABASE_PROJECT_ID" --use-api
 
   build-pages:
+    needs: [check]
     if: ${{ vars.VITE_SUPABASE_URL != '' && vars.VITE_SUPABASE_PUBLISHABLE_KEY != '' }}
     runs-on: ubuntu-latest
     env:
