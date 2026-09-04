@@ -227,8 +227,15 @@ export function GameProvider({ children }) {
         const saved = loadPlayerSession();
         if (saved?.roomCode) {
           socket.emit('join_room', { roomCode: saved.roomCode, nickname: saved.nickname }, (res) => {
-            if (res?.success) dispatch({ type: 'PLAYER_JOINED', payload: { ...res, nickname: saved.nickname } });
-            else clearPlayerSession();
+            if (res?.success) {
+              dispatch({ type: 'PLAYER_JOINED', payload: { ...res, nickname: saved.nickname } });
+              return;
+            }
+            // Chỉ quên phòng khi phòng thật sự không còn. Lỗi tạm thời (phiên
+            // Supabase chưa kịp khôi phục, mất mạng) mà xoá phiên thì học sinh
+            // mất luôn đường tự vào lại — cứ để lần tải trang sau thử tiếp.
+            const msg = res?.message || '';
+            if (/không tồn tại|đã kết thúc|không thuộc/i.test(msg)) clearPlayerSession();
           });
         }
       }

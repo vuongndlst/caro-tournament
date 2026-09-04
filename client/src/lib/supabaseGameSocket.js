@@ -67,7 +67,17 @@ export class SupabaseGameSocket {
     const { data, error } = await supabase.functions.invoke('game-api', {
       body: { action, ...payload },
     });
-    if (error) return { success: false, message: error.message || 'Không gọi được game-api.' };
+    if (error) {
+      // supabase-js coi mọi mã 4xx/5xx là lỗi và chỉ đưa ra "Edge Function
+      // returned a non-2xx status code", nuốt mất thông báo tiếng Việt trong
+      // phần thân phản hồi. Đọc lại thân để học sinh thấy đúng lý do.
+      let message = error.message || 'Không gọi được game-api.';
+      try {
+        const body = await error.context?.json?.();
+        if (body?.message) message = body.message;
+      } catch { /* phản hồi không phải JSON — giữ nguyên thông báo gốc */ }
+      return { success: false, message };
+    }
     return data || { success: false, message: 'Phản hồi rỗng từ game-api.' };
   }
 
