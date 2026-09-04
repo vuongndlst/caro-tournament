@@ -9,6 +9,7 @@ export default function AuthPage({ onSkip }) {
   const [email, setEmail]   = useState('');
   const [password, setPassword] = useState('');
   const [nickname, setNickname] = useState('');
+  const [requestTeacher, setRequestTeacher] = useState(false);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState('');
   const [info, setInfo]         = useState('');
@@ -24,12 +25,15 @@ export default function AuthPage({ onSkip }) {
           setError('Mật khẩu cần ít nhất 10 ký tự, gồm chữ hoa, chữ thường, số và ký tự đặc biệt.');
           setLoading(false); return;
         }
-        const data = await signUp(email.trim(), password, nickname.trim());
+        const data = await signUp(email.trim(), password, nickname.trim(), requestTeacher);
+        const teacherNote = requestTeacher
+          ? ' Đề nghị làm giáo viên đã được gửi, chờ quản trị viên duyệt.'
+          : '';
         if (data?.session) {
-          setInfo('Đăng ký thành công!');
-          onSkip?.();
+          setInfo(`Đăng ký thành công!${teacherNote}`);
+          if (!requestTeacher) onSkip?.();
         } else {
-          setInfo('Đăng ký thành công! Kiểm tra email để xác nhận, sau đó đăng nhập.');
+          setInfo(`Đăng ký thành công! Kiểm tra email để xác nhận, sau đó đăng nhập.${teacherNote}`);
           setMode('login');
         }
       } else {
@@ -133,6 +137,23 @@ export default function AuthPage({ onSkip }) {
               required
             />
           </div>
+
+          {mode === 'register' && (
+            <label className="flex items-start gap-2.5 rounded-xl bg-slate-800/50 border border-slate-700/50 px-3 py-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5 w-4 h-4 accent-indigo-500 shrink-0"
+                checked={requestTeacher}
+                onChange={e => setRequestTeacher(e.target.checked)}
+              />
+              <span className="text-xs text-slate-300 leading-relaxed">
+                Tôi là giáo viên
+                <span className="block text-slate-500 mt-0.5">
+                  Tài khoản vẫn vào quyền học sinh cho tới khi quản trị viên duyệt.
+                </span>
+              </span>
+            </label>
+          )}
 
           <button
             type="submit"

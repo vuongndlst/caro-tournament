@@ -437,7 +437,7 @@ Deno.serve(async (req: Request) => {
       const users = usersData.users || [];
       const ids = users.map((item: any) => item.id);
       const { data: profiles = [] } = ids.length
-        ? await db.from("profiles").select("id,nickname,role,must_change_password,is_locked,mfa_required,created_at").in("id", ids)
+        ? await db.from("profiles").select("id,nickname,role,must_change_password,is_locked,mfa_required,created_at,requested_role,requested_role_at").in("id", ids)
         : { data: [] };
       const byId = new Map(profiles.map((item: any) => [item.id, item]));
       const accounts = await Promise.all(users.map(async (item: any) => {
@@ -451,6 +451,55 @@ Deno.serve(async (req: Request) => {
       }));
       accounts.sort((a: any, b: any) => (a.role || "").localeCompare(b.role || "") || (a.nickname || "").localeCompare(b.nickname || ""));
       return response(req, { success: true, accounts });
+    }
+
+    if (action === "admin_review_teacher_request") {
+      const denied = privilegedError(me, auth, true);
+      if (denied) return response(req, { success: false, message: denied }, 403);
+      const targetId = String(body.userId || "");
+      const approve = body.approve === true;
+      if (!targetId) {
+        return response(req, { success: false, message: "Thiếu tài khoản cần duyệt." }, 422);
+      }
+      const { data: target, error: targetError } = await db
+        .from("profiles").select("id,role,requested_role").eq("id", targetId).single();
+      if (targetError || !target) throw targetError || new Error("Không tìm thấy tài khoản.");
+      if (target.requested_role !== "teacher") {
+        return response(req, { success: false, message: "Tài khoản này không có đề nghị nào đang chờ." }, 409);
+      }
+      if (target.role !== "student") {
+        return response(req, { success: false, message: "Chỉ nâng quyền được cho tài khoản học sinh." }, 409);
+      }
+
+      const reviewedAt = new Date().toISOString();
+      if (!approve) {
+        const { error } = await db.from("profiles")
+          .update({ requested_role: null, requested_role_at: null, updated_at: reviewedAt })
+          .eq("id", targetId);
+        if (error) throw error;
+        return response(req, { success: true, approved: false });
+      }
+
+      // Quyền thật nằm ở app_metadata; cập nhật trước rồi mới đồng bộ profile.
+      const { data: authUser, error: authError } = await db.auth.admin.getUserById(targetId);
+      if (authError || !authUser.user) throw authError || new Error("Không tìm thấy tài khoản Auth.");
+      const { error: metaError } = await db.auth.admin.updateUserById(targetId, {
+        app_metadata: { ...authUser.user.app_metadata, role: "teacher" },
+      });
+      if (metaError) throw metaError;
+
+      const { error: profileError } = await db.from("profiles").update({
+        role: "teacher", mfa_required: true,
+        requested_role: null, requested_role_at: null, updated_at: reviewedAt,
+      }).eq("id", targetId);
+      if (profileError) {
+        // Không để app_metadata lệch với profile nếu bước dưới hỏng.
+        await db.auth.admin.updateUserById(targetId, {
+          app_metadata: { ...authUser.user.app_metadata, role: "student" },
+        });
+        throw profileError;
+      }
+      return response(req, { success: true, approved: true });
     }
 
     if (action === "admin_create_account") {

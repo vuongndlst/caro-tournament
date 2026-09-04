@@ -37,6 +37,7 @@ jobs:
     env:
       VITE_BASE_PATH: /caro-tournament/
       VITE_GAME_BACKEND: supabase
+      VITE_PUBLIC_SITE_URL: https://vuongndlst.github.io/caro-tournament/
       VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
       VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
     steps:

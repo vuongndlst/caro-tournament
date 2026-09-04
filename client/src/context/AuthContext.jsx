@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { getPublicBaseUrl } from '../utils/urls';
 
 const AuthContext = createContext(null);
 const EMPTY_MFA = { loading: false, currentLevel: null, nextLevel: null, factors: [] };
@@ -84,11 +85,16 @@ export function AuthProvider({ children }) {
     return () => subscription.unsubscribe();
   }, [loadProfile]);
 
-  async function signUp(email, password, nickname) {
+  // requestTeacher chỉ tạo một ĐỀ NGHỊ chờ admin duyệt — tài khoản vẫn vào
+  // quyền học sinh cho tới khi được duyệt ở trang quản trị.
+  async function signUp(email, password, nickname, requestTeacher = false) {
     if (!supabase) throw new Error('Supabase chưa được cấu hình.');
     const { data, error } = await supabase.auth.signUp({
       email, password,
-      options: { data: { nickname }, emailRedirectTo: `${window.location.origin}${import.meta.env.BASE_URL}` },
+      options: {
+        data: requestTeacher ? { nickname, requested_role: 'teacher' } : { nickname },
+        emailRedirectTo: getPublicBaseUrl(),
+      },
     });
     if (error) throw error;
     return data;

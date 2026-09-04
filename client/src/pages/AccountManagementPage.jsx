@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
-import { ArrowLeft, Copy, KeyRound, LockKeyhole, RefreshCw, Shield, UnlockKeyhole, UserPlus, Users, CalendarRange, Trophy } from 'lucide-react';
+import { ArrowLeft, Copy, KeyRound, LockKeyhole, RefreshCw, Shield, UnlockKeyhole, UserCheck, UserPlus, Users, CalendarRange, Trophy } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 
@@ -57,6 +57,8 @@ export default function AccountManagementPage() {
 
   if (profile?.role !== 'admin') return <Navigate to="/admin" replace />;
 
+  const pendingTeachers = accounts.filter(account => account.requested_role === 'teacher');
+
   async function createAccount(event) {
     event.preventDefault(); setError(''); setBusyId('create'); setCredential(null);
     try {
@@ -85,6 +87,16 @@ export default function AccountManagementPage() {
     if (!window.confirm(`${locked ? 'Khóa' : 'Mở khóa'} tài khoản ${account.nickname}?`)) return;
     setBusyId(account.id); setError('');
     try { await invoke('admin_set_lock', { userId: account.id, locked }); await loadAccounts(); }
+    catch (err) { setError(err.message); }
+    finally { setBusyId(''); }
+  }
+
+  async function reviewTeacherRequest(account, approve) {
+    if (!window.confirm(approve
+      ? `Duyệt ${account.nickname} (${account.email}) lên giáo viên?`
+      : `Từ chối đề nghị làm giáo viên của ${account.nickname}?`)) return;
+    setBusyId(account.id); setError('');
+    try { await invoke('admin_review_teacher_request', { userId: account.id, approve }); await loadAccounts(); }
     catch (err) { setError(err.message); }
     finally { setBusyId(''); }
   }
@@ -122,6 +134,29 @@ export default function AccountManagementPage() {
           <div className="mb-4 rounded-xl bg-amber-900/30 border border-amber-600/40 p-4 flex flex-wrap items-center justify-between gap-3">
             <div><p className="text-xs text-amber-300 font-semibold">{credential.label} — chỉ hiển thị trong phiên này</p><p className="text-sm mt-1"><code>{credential.email}</code> · <code>{credential.password}</code></p></div>
             <button onClick={copyCredential} className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-sm font-semibold flex items-center gap-1"><Copy className="w-4 h-4" /> Sao chép</button>
+          </div>
+        )}
+
+        {tab === 'accounts' && pendingTeachers.length > 0 && (
+          <div className="mb-4 rounded-xl bg-indigo-900/25 border border-indigo-600/40 p-4">
+            <h2 className="font-bold flex items-center gap-2 mb-1"><UserCheck className="w-4 h-4 text-indigo-300" /> Đề nghị làm giáo viên · {pendingTeachers.length}</h2>
+            <p className="text-xs text-slate-400 mb-3">Người dùng tự đăng ký và chọn "Tôi là giáo viên". Họ đang ở quyền học sinh cho tới khi bạn duyệt.</p>
+            <div className="space-y-2">
+              {pendingTeachers.map(account => (
+                <div key={account.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-900/60 px-3 py-2.5">
+                  <div>
+                    <p className="font-semibold text-sm">{account.nickname}</p>
+                    <p className="text-xs text-slate-500">{account.email}{account.requested_role_at ? ` · gửi ${new Date(account.requested_role_at).toLocaleString('vi-VN')}` : ''}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button disabled={busyId === account.id} onClick={() => reviewTeacherRequest(account, true)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-xs font-semibold disabled:opacity-40">Duyệt</button>
+                    <button disabled={busyId === account.id} onClick={() => reviewTeacherRequest(account, false)}
+                      className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-red-800 text-xs font-semibold disabled:opacity-40">Từ chối</button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
